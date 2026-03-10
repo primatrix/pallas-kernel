@@ -134,8 +134,8 @@ def chunk_gla_fwd_intra_gk(
     q_gated = q_c * g_c.exp()        # [B, NT, C, H, K]
     k_gated = k_c * (-g_c).exp()     # [B, NT, C, H, K]
 
-    # A[b,n,h,i,j] = Σ_k q_gated[b,n,i,h,k] * k_gated[b,n,j,h,k]
-    A = torch.einsum('bnihk,bnjhk->bnhij', q_gated, k_gated)  # [B, NT, H, C, C]
+    # A[b,n,h,i,j] = scale * Σ_k q_gated[b,n,i,h,k] * k_gated[b,n,j,h,k]
+    A = torch.einsum('bnihk,bnjhk->bnhij', q_gated, k_gated) * scale  # [B, NT, H, C, C]
 
     causal_mask = torch.tril(torch.ones(C, C, device=q.device, dtype=torch.bool))
     A = A.masked_fill(~causal_mask, 0.0)
@@ -161,14 +161,21 @@ def chunk_gla_fwd_o_gk(
 
     Corresponds to FLA ``fla.ops.gla.chunk.chunk_gla_fwd_o_gk``.
 
+    When ``cu_seqlens`` is ``None`` (default), T must be a multiple of
+    chunk_size.  When ``cu_seqlens`` is provided, the inputs are packed
+    variable-length sequences (B must be 1).  ``q``, ``v``, ``g`` are
+    packed along dim-1 (total length = sum of sequence lengths), while
+    ``A`` and ``h`` are packed along the chunk dimension (dim-1) with
+    each sequence contributing ``ceil(Li / C)`` chunks.
+
     Args:
-        q: [B, T, H, K] — queries (T must be a multiple of chunk_size)
+        q: [B, T, H, K] — queries
         v: [B, T, H, V] — values
         g: [B, T, H, K] — chunk-local cumsum of gates
         A: [B, NT, H, C, C] — intra-chunk attention matrix
         h: [B, NT, H, K, V] — hidden state at start of each chunk
         scale: scaling factor
-        cu_seqlens: unused, kept for FLA interface compatibility
+        cu_seqlens: [N+1] cumulative sequence lengths for variable-length mode
         chunk_size: block size
 
     Returns:
@@ -177,6 +184,44 @@ def chunk_gla_fwd_o_gk(
     B, T, H, K = q.shape
     V = v.shape[-1]
     C = chunk_size
+
+    if cu_seqlens is not None:
+        assert B == 1, "cu_seqlens requires B=1"
+        N = len(cu_seqlens) - 1
+        o = q.new_zeros(B, T, H, V)
+        chunk_offset = 0
+        for i in range(N):
+            bos = cu_seqlens[i].item()
+            eos = cu_seqlens[i + 1].item()
+            seg_len = eos - bos
+            NT_seg = (seg_len + C - 1) // C
+            T_padded = NT_seg * C
+            pad = T_padded - seg_len
+
+            q_seg = q[:, bos:eos]
+            v_seg = v[:, bos:eos]
+            g_seg = g[:, bos:eos]
+            if pad > 0:
+                q_seg = F.pad(q_seg, (0, 0, 0, 0, 0, pad))
+                v_seg = F.pad(v_seg, (0, 0, 0, 0, 0, pad))
+                g_seg = F.pad(g_seg, (0, 0, 0, 0, 0, pad))
+
+            A_seg = A[:, chunk_offset:chunk_offset + NT_seg]
+            h_seg = h[:, chunk_offset:chunk_offset + NT_seg]
+
+            q_c = q_seg.view(B, NT_seg, C, H, K)
+            v_c = v_seg.view(B, NT_seg, C, H, V)
+            g_c = g_seg.view(B, NT_seg, C, H, K)
+
+            q_gated = q_c * g_c.exp()
+            o_inter = scale * torch.einsum('bnchk,bnhkv->bnchv', q_gated, h_seg)
+            o_intra = torch.einsum('bnhij,bnjhv->bnihv', A_seg, v_c)
+
+            o_seg = (o_inter + o_intra).reshape(B, T_padded, H, V)
+            o[:, bos:eos] = o_seg[:, :seg_len]
+            chunk_offset += NT_seg
+        return o
+
     NT = T // C
 
     q_c = q.view(B, NT, C, H, K)
@@ -188,8 +233,8 @@ def chunk_gla_fwd_o_gk(
     # Inter-chunk: o_inter = scale * q_gated @ h
     o_inter = scale * torch.einsum('bnchk,bnhkv->bnchv', q_gated, h)  # [B, NT, C, H, V]
 
-    # Intra-chunk: o_intra = scale * A @ v
-    o_intra = scale * torch.einsum('bnhij,bnjhv->bnihv', A, v_c)      # [B, NT, C, H, V]
+    # Intra-chunk: o_intra = A @ v  (A already contains scale)
+    o_intra = torch.einsum('bnhij,bnjhv->bnihv', A, v_c)      # [B, NT, C, H, V]
 
     o = (o_inter + o_intra).reshape(B, T, H, V)
     return o

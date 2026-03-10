@@ -1,6 +1,12 @@
+from __future__ import annotations
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
+
 import torch
 
-from tests.src.ops.gla.common.fused_recurrent import fused_recurrent
+from tests.src.ops.common.fused_recurrent import fused_recurrent
 
 def fused_recurrent_gla(
     q: torch.Tensor,
@@ -14,9 +20,7 @@ def fused_recurrent_gla(
     reverse: bool = False,
     cu_seqlens: torch.LongTensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
-    """Fused recurrent GLA — public API matching FLA signature.
-
-    Wraps fused_recurrent_gla_fwd, mapping gk/gv to the internal API.
+    """Fused recurrent GLA — Torch CPU reference with native cu_seqlens support.
 
     Args:
         q: [B, T, H, K]
@@ -28,7 +32,7 @@ def fused_recurrent_gla(
         initial_state: [N, H, K, V]
         output_final_state: whether to return final hidden state
         reverse: if True, iterate time steps from T-1 to 0
-        cu_seqlens: [N+1] cumulative sequence lengths
+        cu_seqlens: [N+1] cumulative sequence lengths (requires B=1)
 
     Returns:
         o: [B, T, H, V]
@@ -36,11 +40,12 @@ def fused_recurrent_gla(
     """
     if scale is None:
         scale = q.shape[-1] ** -0.5
-    # gla fused_recurrent jump to common API, gk/gv are directly passed to the kernel as log-gates
     return fused_recurrent(
-        q=q, k=k, v=v,
-        g=None, g_gamma=None,
-        gk=gk, gv=gv,
+        q=q,
+        k=k,
+        v=v,
+        gk=gk,
+        gv=gv,
         scale=scale,
         initial_state=initial_state,
         output_final_state=output_final_state,
