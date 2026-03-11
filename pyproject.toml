@@ -8,6 +8,8 @@ dependencies = [
     "einops>=0.8.2",
     "flax>=0.11.2",
     "numpy>=2.4.2",
+    "pre-commit>=4.5.1",
+    "ruff>=0.15.0",
 ]
 
 [project.optional-dependencies]
@@ -47,3 +49,7 @@ torch = [
     { index = "pytorch-cpu", extra = "tpu" },
 ]
 torchvision = [{ index = "pytorch-cu126", extra = "gpu" }]
+
+
+[tool.ruff]
+ignore = ["E712","E741","F841"]

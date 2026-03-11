@@ -18,7 +18,10 @@ def fused_chunk_gla(
     between fused and non-fused chunk implementations.
     """
     return chunk_gla(
-        q=q, k=k, v=v, g=g,
+        q=q,
+        k=k,
+        v=v,
+        g=g,
         scale=scale,
         initial_state=initial_state,
         output_final_state=output_final_state,

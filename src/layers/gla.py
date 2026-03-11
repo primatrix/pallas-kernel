@@ -8,12 +8,10 @@
 
 from __future__ import annotations
 
-import math
-from typing import Any, Optional
+from typing import Any
 
 import jax
 import jax.numpy as jnp
-import numpy as np
 from flax import nnx
 
 
@@ -22,16 +20,17 @@ from flax import nnx
 from src.modules.layernorm import RMSNorm
 from src.modules.fused_norm_gate import FusedRMSNormGated
 from src.modules.convolution import ShortConvolution
-from src.ops.gla import naive_recurrent_gla, chunk_gla, fused_recurrent_gla, fused_chunk_gla
+from src.ops.gla import chunk_gla, fused_recurrent_gla, fused_chunk_gla
 
 ACT2FN = {
-    'swish': jax.nn.swish,
-    'silu': jax.nn.swish,
-    'gelu': jax.nn.gelu,
-    'relu': jax.nn.relu,
-    'sigmoid': jax.nn.sigmoid,
-    'tanh': jax.nn.tanh,
+    "swish": jax.nn.swish,
+    "silu": jax.nn.swish,
+    "gelu": jax.nn.gelu,
+    "relu": jax.nn.relu,
+    "sigmoid": jax.nn.sigmoid,
+    "tanh": jax.nn.tanh,
 }
+
 
 def _rearrange_to_heads(x: jnp.ndarray, head_dim: int) -> jnp.ndarray:
     """Reshape: ... (h d) -> ... h d"""
@@ -68,6 +67,7 @@ def _repeat_kv(x: jnp.ndarray, num_groups: int, head_dim: int) -> jnp.ndarray:
 # GatedLinearAttention (nnx.Module, 完整层)
 # =============================================================================
 
+
 class GatedLinearAttention(nnx.Module):
     r"""
     JAX/Flax NNX implementation of GatedLinearAttention.
@@ -80,7 +80,7 @@ class GatedLinearAttention(nnx.Module):
 
     def __init__(
         self,
-        mode: str = 'chunk',
+        mode: str = "chunk",
         hidden_size: int = 1024,
         expand_k: float = 0.5,
         expand_v: float = 1.0,
@@ -91,7 +91,7 @@ class GatedLinearAttention(nnx.Module):
         conv_size: int = 4,
         conv_bias: bool = False,
         use_output_gate: bool = True,
-        gate_fn: str = 'swish',
+        gate_fn: str = "swish",
         elementwise_affine: bool | None = True,
         norm_eps: float = 1e-5,
         gate_logit_normalizer: int = 16,
@@ -123,26 +123,31 @@ class GatedLinearAttention(nnx.Module):
         self.clamp_min = clamp_min
         self.layer_idx = layer_idx
 
-        assert mode in ['chunk', 'fused_recurrent', 'fused_chunk'], \
+        assert mode in ["chunk", "fused_recurrent", "fused_chunk"], (
             f"Not supported mode `{mode}`."
-        assert self.key_dim % num_heads == 0, \
+        )
+        assert self.key_dim % num_heads == 0, (
             f"key dim must be divisible by num_heads of {num_heads}"
-        assert self.value_dim % num_heads == 0, \
+        )
+        assert self.value_dim % num_heads == 0, (
             f"value dim must be divisible by num_heads of {num_heads}"
+        )
 
         self.head_k_dim = self.key_dim // num_heads
         self.head_v_dim = self.value_dim // num_heads
 
         # Linear projections
-        self.q_proj = nnx.Linear(
-            hidden_size, self.key_dim, use_bias=False, rngs=rngs)
+        self.q_proj = nnx.Linear(hidden_size, self.key_dim, use_bias=False, rngs=rngs)
         self.k_proj = nnx.Linear(
-            hidden_size, self.key_dim_per_group, use_bias=False, rngs=rngs)
+            hidden_size, self.key_dim_per_group, use_bias=False, rngs=rngs
+        )
         self.v_proj = nnx.Linear(
-            hidden_size, self.value_dim_per_group, use_bias=False, rngs=rngs)
+            hidden_size, self.value_dim_per_group, use_bias=False, rngs=rngs
+        )
         if self.use_output_gate:
             self.g_proj = nnx.Linear(
-                hidden_size, self.value_dim, use_bias=False, rngs=rngs)
+                hidden_size, self.value_dim, use_bias=False, rngs=rngs
+            )
 
         # Short convolutions
         if use_short_conv:
@@ -150,36 +155,37 @@ class GatedLinearAttention(nnx.Module):
                 hidden_size=self.key_dim,
                 kernel_size=conv_size,
                 bias=conv_bias,
-                activation='silu',
+                activation="silu",
                 rngs=rngs,
             )
             self.k_conv1d = ShortConvolution(
                 hidden_size=self.key_dim_per_group,
                 kernel_size=conv_size,
                 bias=conv_bias,
-                activation='silu',
+                activation="silu",
                 rngs=rngs,
             )
             self.v_conv1d = ShortConvolution(
                 hidden_size=self.value_dim_per_group,
                 kernel_size=conv_size,
                 bias=conv_bias,
-                activation='silu',
+                activation="silu",
                 rngs=rngs,
             )
 
         # Gate projection (low-rank)
         self.gk_proj = nnx.Sequential(
             nnx.Linear(hidden_size, gate_low_rank_dim, use_bias=False, rngs=rngs),
-            nnx.Linear(gate_low_rank_dim, self.key_dim_per_group, use_bias=True, rngs=rngs),
+            nnx.Linear(
+                gate_low_rank_dim, self.key_dim_per_group, use_bias=True, rngs=rngs
+            ),
         )
 
         # Output projection
-        self.o_proj = nnx.Linear(
-            self.value_dim, hidden_size, use_bias=False, rngs=rngs)
+        self.o_proj = nnx.Linear(self.value_dim, hidden_size, use_bias=False, rngs=rngs)
 
         # Normalization + gating
-        if gate_fn == 'swish' and fuse_norm and use_output_gate:
+        if gate_fn == "swish" and fuse_norm and use_output_gate:
             self.g_norm_swish_gate = FusedRMSNormGated(
                 hidden_size=self.head_v_dim,
                 elementwise_affine=elementwise_affine,
@@ -215,13 +221,13 @@ class GatedLinearAttention(nnx.Module):
 
         batch_size, q_len, _ = hidden_states.shape
         # 对于短序列用 fused_recurrent (这里都映射到同一个 naive 实现)
-        mode = 'fused_recurrent' if q_len <= 64 else self.mode
+        mode = "fused_recurrent" if q_len <= 64 else self.mode
 
         last_state = None
         if past_key_values is not None and len(past_key_values) > self.layer_idx:
             last_state = past_key_values[self.layer_idx]
 
-        cu_seqlens = kwargs.get('cu_seqlens')
+        cu_seqlens = kwargs.get("cu_seqlens")
         chunk_size = 16
 
         # NOTE: 不实现 attention_mask → unpad 逻辑 (JAX 不使用动态 index scatter)
@@ -230,7 +236,7 @@ class GatedLinearAttention(nnx.Module):
         if self.use_short_conv:
             conv_state_q, conv_state_k, conv_state_v = None, None, None
             if last_state is not None:
-                conv_state_q, conv_state_k, conv_state_v = last_state['conv_state']
+                conv_state_q, conv_state_k, conv_state_v = last_state["conv_state"]
             q, conv_state_q = self.q_conv1d(
                 x=self.q_proj(hidden_states),
                 cache=conv_state_q,
@@ -258,7 +264,9 @@ class GatedLinearAttention(nnx.Module):
         # Reshape to multi-head format
         q = _rearrange_to_heads(q, self.head_k_dim)  # ... H K
         if self.num_kv_groups > 1:
-            k = _repeat_kv(k, self.num_kv_groups, self.head_k_dim)   # ... (H*G) K → ... H K
+            k = _repeat_kv(
+                k, self.num_kv_groups, self.head_k_dim
+            )  # ... (H*G) K → ... H K
             gk = _repeat_kv(gk, self.num_kv_groups, self.head_k_dim)
             v = _repeat_kv(v, self.num_kv_groups, self.head_v_dim)
         else:
@@ -274,8 +282,10 @@ class GatedLinearAttention(nnx.Module):
             q = self.feature_map_fn(q)
             k = self.feature_map_fn(k)
 
-        recurrent_state = last_state['recurrent_state'] if last_state is not None else None
-        if mode == 'fused_recurrent':
+        recurrent_state = (
+            last_state["recurrent_state"] if last_state is not None else None
+        )
+        if mode == "fused_recurrent":
             o, recurrent_state = fused_recurrent_gla(
                 q=q,
                 k=k,
@@ -285,7 +295,7 @@ class GatedLinearAttention(nnx.Module):
                 output_final_state=use_cache,
                 cu_seqlens=cu_seqlens,
             )
-        elif mode == 'fused_chunk':
+        elif mode == "fused_chunk":
             o, recurrent_state = fused_chunk_gla(
                 q=q,
                 k=k,
@@ -295,7 +305,7 @@ class GatedLinearAttention(nnx.Module):
                 output_final_state=use_cache,
                 cu_seqlens=cu_seqlens,
             )
-        elif mode == 'chunk':
+        elif mode == "chunk":
             o, recurrent_state = chunk_gla(
                 q=q,
                 k=k,
@@ -312,7 +322,9 @@ class GatedLinearAttention(nnx.Module):
         if past_key_values is not None:
             past_key_values.update(
                 recurrent_state=recurrent_state,
-                conv_state=(conv_state_q, conv_state_k, conv_state_v) if self.use_short_conv else None,
+                conv_state=(conv_state_q, conv_state_k, conv_state_v)
+                if self.use_short_conv
+                else None,
                 layer_idx=self.layer_idx,
                 offset=q_len,
             )
@@ -336,4 +348,3 @@ class GatedLinearAttention(nnx.Module):
 # =============================================================================
 # Smoke tests
 # =============================================================================
-

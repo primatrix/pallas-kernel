@@ -29,7 +29,7 @@ class FusedRMSNormGated(nnx.Module):
         input_dtype = x.dtype
         x = x.astype(jnp.float32)
         g = g.astype(jnp.float32)
-        rms = jax.lax.rsqrt(jnp.mean(x ** 2, axis=-1, keepdims=True) + self.eps)
+        rms = jax.lax.rsqrt(jnp.mean(x**2, axis=-1, keepdims=True) + self.eps)
         x = x * rms
         if self.weight is not None:
             x = x * self.weight.value.astype(jnp.float32)

@@ -1,5 +1,6 @@
 import torch
 
+
 def fused_recurrent(
     q: torch.Tensor,
     k: torch.Tensor,
@@ -18,21 +19,21 @@ def fused_recurrent(
     V = v.shape[-1]
 
     if scale is None:
-        scale = K ** -0.5
+        scale = K**-0.5
 
-    USE_G       = g is not None
+    USE_G = g is not None
     USE_G_GAMMA = g_gamma is not None
-    USE_GK      = gk is not None
-    USE_GV      = gv is not None
+    USE_GK = gk is not None
+    USE_GV = gv is not None
 
     # All accumulation in float32, matching the Triton kernel's tl.float32 accumulators
-    q_f        = q.float().cpu()
-    k_f        = k.float().cpu()
-    v_f        = v.float().cpu()
-    g_f        = g.float().cpu()        if USE_G       else None
-    g_gamma_f  = g_gamma.float().cpu() if USE_G_GAMMA else None
-    gk_f       = gk.float().cpu()      if USE_GK      else None
-    gv_f       = gv.float().cpu()      if USE_GV      else None
+    q_f = q.float().cpu()
+    k_f = k.float().cpu()
+    v_f = v.float().cpu()
+    g_f = g.float().cpu() if USE_G else None
+    g_gamma_f = g_gamma.float().cpu() if USE_G_GAMMA else None
+    gk_f = gk.float().cpu() if USE_GK else None
+    gv_f = gv.float().cpu() if USE_GV else None
 
     o = torch.zeros(B, T, H, V, dtype=torch.float32)
 
@@ -54,8 +55,8 @@ def fused_recurrent(
             b = 0 if cu_seqlens is not None else batch_idx
 
             q_t = q_f[b, t_idx] * scale  # [H, K]
-            k_t = k_f[b, t_idx]           # [H, K]
-            v_t = v_f[b, t_idx]           # [H, V]
+            k_t = k_f[b, t_idx]  # [H, K]
+            v_t = v_f[b, t_idx]  # [H, V]
 
             # Apply log-gates to h: [H, K, V]
             if USE_G:

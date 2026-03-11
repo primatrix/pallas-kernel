@@ -6,12 +6,13 @@ import numpy as np
 from jax.experimental import pallas as pl
 from jax.experimental.pallas import tpu as pltpu
 
-from src.utils import next_power_of_2, cdiv, align_up, pad_to_multiple
+from src.utils import cdiv, align_up, pad_to_multiple
 
 
 # ============================================================================
 # Pure JAX reference implementation
 # ============================================================================
+
 
 def fused_recurrent_gla_fwd_ref(
     q: jnp.ndarray,
@@ -61,20 +62,20 @@ def fused_recurrent_gla_fwd_ref(
     V = v.shape[-1]
 
     if scale is None:
-        scale = K ** -0.5
+        scale = K**-0.5
 
-    USE_G       = g is not None
+    USE_G = g is not None
     USE_G_GAMMA = g_gamma is not None
-    USE_GK      = gk is not None
-    USE_GV      = gv is not None
+    USE_GK = gk is not None
+    USE_GV = gv is not None
 
-    q_f  = q.astype(jnp.float32)
-    k_f  = k.astype(jnp.float32)
-    v_f  = v.astype(jnp.float32)
-    g_f  = g.astype(jnp.float32)       if USE_G       else None
+    q_f = q.astype(jnp.float32)
+    k_f = k.astype(jnp.float32)
+    v_f = v.astype(jnp.float32)
+    g_f = g.astype(jnp.float32) if USE_G else None
     g_gamma_f = g_gamma.astype(jnp.float32) if USE_G_GAMMA else None
-    gk_f = gk.astype(jnp.float32)      if USE_GK      else None
-    gv_f = gv.astype(jnp.float32)      if USE_GV      else None
+    gk_f = gk.astype(jnp.float32) if USE_GK else None
+    gv_f = gv.astype(jnp.float32) if USE_GV else None
 
     o = jnp.zeros((B, T, H, V), dtype=jnp.float32)
 
@@ -95,8 +96,8 @@ def fused_recurrent_gla_fwd_ref(
             t_idx = bos + i_t
 
             q_t = q_f[b, t_idx] * scale  # [H, K]
-            k_t = k_f[b, t_idx]           # [H, K]
-            v_t = v_f[b, t_idx]           # [H, V]
+            k_t = k_f[b, t_idx]  # [H, K]
+            v_t = v_f[b, t_idx]  # [H, V]
 
             if USE_G:
                 h = h * jnp.exp(g_f[b, t_idx])[:, None, None]
@@ -129,6 +130,7 @@ def fused_recurrent_gla_fwd_ref(
 
     ht = jnp.stack(ht_list, axis=0) if output_final_state else None
     return o, ht
+
 
 # ============================================================================
 # Pallas kernel
@@ -180,6 +182,7 @@ def _fused_recurrent_gla_fwd_kernel(
         seq_idx = idx_nh // H
         bos = seqlens[seq_idx]
         eos = seqlens[seq_idx + 1]
+
         # Zero-init the output block: on TPU, output blocks are not
         # guaranteed to be zero-initialized.  Each varlen grid cell only
         # writes to [bos, eos), so the remaining positions must be
@@ -187,6 +190,7 @@ def _fused_recurrent_gla_fwd_kernel(
         def _zero_output(t, _):
             o[0, 0, 0, t, 0:BV] = jnp.zeros(BV, dtype=o.dtype)
             return _
+
         jax.lax.fori_loop(0, T, _zero_output, None)
     else:
         bos = 0
@@ -227,6 +231,7 @@ def _fused_recurrent_gla_fwd_kernel(
 # Pallas launcher
 # ============================================================================
 
+
 def _fused_recurrent_gla_fwd(
     q: jax.Array,
     k: jax.Array,
@@ -265,7 +270,11 @@ def _fused_recurrent_gla_fwd(
     gk_trans = pad_to_multiple(gk, BK, 3, 0).transpose(2, 0, 1, 3) if use_gk else None
     gv_trans = pad_to_multiple(gv, BV, 3, 0).transpose(2, 0, 1, 3) if use_gv else None
     # h0: [N, H, K, V] -> transpose(1,0,2,3) -> [H, N, K, V]
-    h0_trans = pad_to_multiple(h0, [BK, BV], [2, 3], 0).transpose(1, 0, 2, 3) if use_init_state else None
+    h0_trans = (
+        pad_to_multiple(h0, [BK, BV], [2, 3], 0).transpose(1, 0, 2, 3)
+        if use_init_state
+        else None
+    )
 
     USE_SEQLENS = cu_seqlens is not None
 
@@ -277,6 +286,7 @@ def _fused_recurrent_gla_fwd(
         def v_index_map(idx_v, idx_k, idx_nh):
             return (idx_nh % H, 0, 0, idx_v)
     else:
+
         def qk_index_map(idx_v, idx_k, idx_nh):
             return (idx_nh % H, idx_nh // H, 0, idx_k)
 
@@ -300,8 +310,14 @@ def _fused_recurrent_gla_fwd(
     v_blockspec = pl.BlockSpec([1, 1, T, BV], v_index_map)
     gk_blockspec = pl.BlockSpec([1, 1, T, BK], qk_index_map) if use_gk else None
     gv_blockspec = pl.BlockSpec([1, 1, T, BV], v_index_map) if use_gv else None
-    h0_blockspec = pl.BlockSpec([1, 1, BK, BV], h0_index_map) if use_init_state else None
-    seqlens_blockspec = pl.BlockSpec([N + 1], lambda *idx: (0,), memory_space=pltpu.TPUMemorySpace.SMEM) if USE_SEQLENS else None
+    h0_blockspec = (
+        pl.BlockSpec([1, 1, BK, BV], h0_index_map) if use_init_state else None
+    )
+    seqlens_blockspec = (
+        pl.BlockSpec([N + 1], lambda *idx: (0,), memory_space=pltpu.TPUMemorySpace.SMEM)
+        if USE_SEQLENS
+        else None
+    )
 
     o_blockspec = pl.BlockSpec([1, 1, 1, T, BV], o_index_map)
     ht_blockspec = pl.BlockSpec([1, 1, BK, BV], ht_index_map)
@@ -329,7 +345,15 @@ def _fused_recurrent_gla_fwd(
         call_func,
         out_shape=[o_spec, ht_spec],
         grid=grid,
-        in_specs=[q_blockspec, k_blockspec, v_blockspec, gk_blockspec, gv_blockspec, h0_blockspec, seqlens_blockspec],
+        in_specs=[
+            q_blockspec,
+            k_blockspec,
+            v_blockspec,
+            gk_blockspec,
+            gv_blockspec,
+            h0_blockspec,
+            seqlens_blockspec,
+        ],
         out_specs=[o_blockspec, ht_blockspec],
     )(q_trans, k_trans, v_trans, gk_trans, gv_trans, h0_trans, cu_seqlens)
     o, ht = results
@@ -342,9 +366,11 @@ def _fused_recurrent_gla_fwd(
     ht = ht[:, :, :origin_K, :origin_V] if use_final_state else None
     return o, ht
 
+
 # ============================================================================
 # Entry point: validation + dispatch
 # ============================================================================
+
 
 def fused_recurrent_gla_fwd(
     q: jax.Array,
@@ -361,15 +387,25 @@ def fused_recurrent_gla_fwd(
     B, T, H, K = q.shape
     V = v.shape[-1]
     N = cu_seqlens.shape[0] - 1 if cu_seqlens is not None else B
-    scale = scale if scale is not None else K ** -0.5
+    scale = scale if scale is not None else K**-0.5
 
     assert k.shape == (B, T, H, K), f"Expected k shape {(B, T, H, K)}, got {k.shape}"
     assert v.shape == (B, T, H, V), f"Expected v shape {(B, T, H, V)}, got {v.shape}"
-    assert (gk is None) or (gk.shape == (B, T, H, K)), f"Expected gk shape {(B, T, H, K)}, got {gk.shape}"
-    assert (gv is None) or (gv.shape == (B, T, H, V)), f"Expected gv shape {(B, T, H, V)}, got {gv.shape}"
-    assert (initial_state is None) or (initial_state.shape == (N, H, K, V)), f"Expected initial_state shape {(N, H, K, V)}, got {initial_state.shape}"
-    assert (cu_seqlens is None) or (B == 1), f"Batch size must be 1 when using cu_seqlens, got {B}"
-    assert scale is not None, "ignore pylance warning about unused variable `scale`, which is actually used in the kernel call"
+    assert (gk is None) or (gk.shape == (B, T, H, K)), (
+        f"Expected gk shape {(B, T, H, K)}, got {gk.shape}"
+    )
+    assert (gv is None) or (gv.shape == (B, T, H, V)), (
+        f"Expected gv shape {(B, T, H, V)}, got {gv.shape}"
+    )
+    assert (initial_state is None) or (initial_state.shape == (N, H, K, V)), (
+        f"Expected initial_state shape {(N, H, K, V)}, got {initial_state.shape}"
+    )
+    assert (cu_seqlens is None) or (B == 1), (
+        f"Batch size must be 1 when using cu_seqlens, got {B}"
+    )
+    assert scale is not None, (
+        "ignore pylance warning about unused variable `scale`, which is actually used in the kernel call"
+    )
 
     o, ht = _fused_recurrent_gla_fwd(
         q=q,
@@ -393,6 +429,7 @@ def fused_recurrent_gla_fwd(
 # ============================================================================
 # Public API matching FLA signature
 # ============================================================================
+
 
 def fused_recurrent_gla(
     q: jax.Array,
@@ -427,8 +464,11 @@ def fused_recurrent_gla(
         ht: [N, H, K, V] if output_final_state else None
     """
     return fused_recurrent_gla_fwd(
-        q=q, k=k, v=v,
-        gk=gk, gv=gv,
+        q=q,
+        k=k,
+        v=v,
+        gk=gk,
+        gv=gv,
         scale=scale,
         initial_state=initial_state,
         output_final_state=output_final_state,

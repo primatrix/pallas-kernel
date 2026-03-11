@@ -9,6 +9,7 @@ import numpy as np
 # Sub-function 1: chunk_local_cumsum
 # =============================================================================
 
+
 def chunk_local_cumsum_ref(
     g: jax.Array,
     chunk_size: int,
@@ -28,8 +29,12 @@ def chunk_local_cumsum_ref(
     """
     B, T, H, K = g.shape
     assert reverse == False, "Reverse mode not supported in chunk_local_cumsum"
-    assert T % chunk_size == 0, "T must be a multiple of chunk_size for chunk_local_cumsum"
-    assert (cu_seqlens_cpu is None) or (cu_seqlens_cpu % T == 0).all(), "cu_seqlens must be multiples of chunk_size for chunk_local_cumsum"
+    assert T % chunk_size == 0, (
+        "T must be a multiple of chunk_size for chunk_local_cumsum"
+    )
+    assert (cu_seqlens_cpu is None) or (cu_seqlens_cpu % T == 0).all(), (
+        "cu_seqlens must be multiples of chunk_size for chunk_local_cumsum"
+    )
     g = g.reshape(-1, H, K)
     C = chunk_size
     NT = B * T // C
@@ -43,6 +48,7 @@ def chunk_local_cumsum_ref(
 # =============================================================================
 # Sub-function 2: chunk_fwd_h
 # =============================================================================
+
 
 def chunk_fwd_h_ref(
     k: jax.Array,
@@ -77,7 +83,9 @@ def chunk_fwd_h_ref(
     NT = T // C
     N = B if cu_seqlens_cpu is None else cu_seqlens_cpu.shape[-1] - 1
     assert T % C == 0, "T must be a multiple of chunk_size for chunk_fwd_h"
-    assert (cu_seqlens_cpu is None) or (cu_seqlens_cpu % C == 0).all(), "cu_seqlens must be multiples of chunk_size for chunk_fwd_h"
+    assert (cu_seqlens_cpu is None) or (cu_seqlens_cpu % C == 0).all(), (
+        "cu_seqlens must be multiples of chunk_size for chunk_fwd_h"
+    )
     # seqlens = jnp.diff(cu_seqlens_cpu) if cu_seqlens_cpu is not None else None
 
     k = k.reshape(-1, H, K)
@@ -89,11 +97,11 @@ def chunk_fwd_h_ref(
     h_all = jnp.zeros([B, NT, H, K, V], dtype=k.dtype)
     for i_n in range(N):
         if cu_seqlens_cpu is None:
-           bos = i_n * T
-           eos = (i_n + 1) * T
+            bos = i_n * T
+            eos = (i_n + 1) * T
         else:
-           bos = int(cu_seqlens_cpu[i_n])
-           eos = int(cu_seqlens_cpu[i_n + 1])
+            bos = int(cu_seqlens_cpu[i_n])
+            eos = int(cu_seqlens_cpu[i_n + 1])
 
         h = jnp.zeros((H, K, V), dtype=jnp.float32)
         if h0 is not None:
@@ -102,16 +110,18 @@ def chunk_fwd_h_ref(
         NT = (eos - bos) // C
         for i_t in range(NT):
             h_all[i_n, i_t] = h.astype(h_all.dtype)
-            b_k = k[bos + i_t * C: bos + (i_t + 1) * C]   # [C, H, K]
-            b_v = v[bos + i_t * C: bos + (i_t + 1) * C]    # [C, H, V]
+            b_k = k[bos + i_t * C : bos + (i_t + 1) * C]  # [C, H, K]
+            b_v = v[bos + i_t * C : bos + (i_t + 1) * C]  # [C, H, V]
             if gk is not None:
-                b_gk = gk[bos + i_t * C: bos + (i_t + 1) * C]  # [C, H, K]
-                b_gk_last = b_gk[-1]                    # [H, K]
-                h *= jnp.exp(b_gk_last[:, :, None])    # b_gk_last -> [H, K, V]
+                b_gk = gk[bos + i_t * C : bos + (i_t + 1) * C]  # [C, H, K]
+                b_gk_last = b_gk[-1]  # [H, K]
+                h *= jnp.exp(b_gk_last[:, :, None])  # b_gk_last -> [H, K, V]
 
-                b_k = (b_k * jnp.exp(b_gk_last[None,:,:] - b_gk))    # b_gk_last -> [C, H, K]
+                b_k = b_k * jnp.exp(
+                    b_gk_last[None, :, :] - b_gk
+                )  # b_gk_last -> [C, H, K]
 
-            h = h + jnp.einsum('chk,chv->hkv', b_k, b_v)
+            h = h + jnp.einsum("chk,chv->hkv", b_k, b_v)
         if output_final_state:
             ht[i_n] = h.astype(ht.dtype)
 
@@ -121,6 +131,7 @@ def chunk_fwd_h_ref(
 # =============================================================================
 # Sub-function 3: chunk_gla_fwd_intra_gk
 # =============================================================================
+
 
 def chunk_gla_fwd_intra_gk(
     q: jax.Array,
@@ -154,7 +165,7 @@ def chunk_gla_fwd_intra_gk(
     q_gated = q_c * jnp.exp(g_c)
     k_gated = k_c * jnp.exp(-g_c)
 
-    A = jnp.einsum('bnihk,bnjhk->bnihj', q_gated, k_gated)
+    A = jnp.einsum("bnihk,bnjhk->bnihj", q_gated, k_gated)
     A = A.reshape(B, T, H, C)
     # causal_mask = jnp.tril(jnp.ones((C, C), dtype=jnp.bool_))
     # A = jnp.where(causal_mask, A, 0.0)
@@ -165,6 +176,7 @@ def chunk_gla_fwd_intra_gk(
 # =============================================================================
 # Sub-function 4: chunk_gla_fwd_o_gk
 # =============================================================================
+
 
 def chunk_gla_fwd_o_gk_ref(
     q: jax.Array,
@@ -196,7 +208,9 @@ def chunk_gla_fwd_o_gk_ref(
     C = chunk_size
     NT = B * T // C
     assert T % C == 0, "T must be a multiple of chunk_size for chunk_gla_fwd_o_gk_ref"
-    assert (cu_seqlens_cpu is None) or (cu_seqlens_cpu % C == 0).all(), "cu_seqlens must be multiples of chunk_size for chunk_fwd_h"
+    assert (cu_seqlens_cpu is None) or (cu_seqlens_cpu % C == 0).all(), (
+        "cu_seqlens must be multiples of chunk_size for chunk_fwd_h"
+    )
 
     q = q.reshape(-1, C, H, K)
     v = v.reshape(-1, C, H, V)
@@ -207,21 +221,25 @@ def chunk_gla_fwd_o_gk_ref(
     qg = q * jnp.exp(gk)
 
     # Inter-chunk: o_inter = scale * (q_gated @ h)
-    o_inter = scale * jnp.einsum('nchk,nhkv->nchv', qg, h)  # [C, K] @ [K, V] -> [C, V]
+    o_inter = scale * jnp.einsum("nchk,nhkv->nchv", qg, h)  # [C, K] @ [K, V] -> [C, V]
 
-    causal_mask = jnp.tril(jnp.ones((C, C), dtype=jnp.bool_))[:, None, :]  # (C, 1, C) → broadcasts to (NT, C, H, C)
+    causal_mask = jnp.tril(jnp.ones((C, C), dtype=jnp.bool_))[
+        :, None, :
+    ]  # (C, 1, C) → broadcasts to (NT, C, H, C)
     n_A = jnp.where(causal_mask, A, 0.0)
 
     # [C, C] @ [C, V] -> [C, V]
     # Intra-chunk: o_intra = A @ v, contract over j (key position within chunk)
-    o_intra = jnp.einsum('nihj,njhv->nihv', n_A, v)
+    o_intra = jnp.einsum("nihj,njhv->nihv", n_A, v)
 
     o = (o_inter + o_intra).reshape(B, T, H, V)
     return o
 
+
 # =============================================================================
 # Orchestrator: chunk_gla_fwd
 # =============================================================================
+
 
 def chunk_gla_fwd(
     q: jax.Array,
@@ -260,14 +278,18 @@ def chunk_gla_fwd(
         g_cumsum = chunk_local_cumsum_ref(g, C, cu_seqlens_cpu=cu_seqlens)
 
     h, ht = chunk_fwd_h_ref(
-        k, v, gk=g_cumsum,
+        k,
+        v,
+        gk=g_cumsum,
         h0=initial_state,
         output_final_state=output_final_state,
         cu_seqlens_cpu=cu_seqlens,
         chunk_size=C,
     )
     A = chunk_gla_fwd_intra_gk(q, k, g_cumsum, scale, chunk_size=C)
-    o = chunk_gla_fwd_o_gk(q, v, g_cumsum, A, h, scale, chunk_size=C, cu_seqlens_cpu=cu_seqlens)
+    o = chunk_gla_fwd_o_gk(
+        q, v, g_cumsum, A, h, scale, chunk_size=C, cu_seqlens_cpu=cu_seqlens
+    )
 
     o = o[:, :T]
     return g_cumsum, A, h, ht, o
@@ -276,6 +298,7 @@ def chunk_gla_fwd(
 # =============================================================================
 # Public API: chunk_gla
 # =============================================================================
+
 
 def chunk_gla(
     q: jax.Array,
@@ -314,11 +337,15 @@ def chunk_gla(
     B, T, H, K = q.shape
 
     if scale is None:
-        scale = K ** -0.5
+        scale = K**-0.5
 
     _, _, _, ht, o = chunk_gla_fwd(
-        q, k, v, g,
-        g_cumsum=None, scale=scale,
+        q,
+        k,
+        v,
+        g,
+        g_cumsum=None,
+        scale=scale,
         initial_state=initial_state,
         output_final_state=output_final_state,
         cu_seqlens=cu_seqlens,
@@ -327,14 +354,23 @@ def chunk_gla(
     final_state = ht if output_final_state else None
     return o.astype(dtype), final_state
 
+
 # =============================================================================
 # Pallas kernel: chunk_gla_fwd_o_gk (unified, handles both varlen and non-varlen)
 # =============================================================================
 
+
 def chunk_gla_fwd_o_gk_pl_kernel(
-    q_ref, v_ref, g_ref, h_ref, A_ref,
+    q_ref,
+    v_ref,
+    g_ref,
+    h_ref,
+    A_ref,
     o_ref,
-    *, BT, scale, USE_EXP2,
+    *,
+    BT,
+    scale,
+    USE_EXP2,
 ):
     """Unified GLA forward O+GK Pallas kernel.
 
@@ -347,11 +383,11 @@ def chunk_gla_fwd_o_gk_pl_kernel(
       v_ref: (1, 1, BT, V)   A_ref: (1, 1, BT, BT)
       h_ref: (1, 1, K, V)    o_ref: (1, 1, BT, V)
     """
-    b_q = q_ref[0, 0]   # (BT, K)
-    b_g = g_ref[0, 0]   # (BT, K)
-    b_v = v_ref[0, 0]   # (BT, V)
-    b_h = h_ref[0, 0]   # (K, V)
-    b_A = A_ref[0, 0]   # (BT, BT)
+    b_q = q_ref[0, 0]  # (BT, K)
+    b_g = g_ref[0, 0]  # (BT, K)
+    b_v = v_ref[0, 0]  # (BT, V)
+    b_h = h_ref[0, 0]  # (K, V)
+    b_A = A_ref[0, 0]  # (BT, BT)
 
     # Inter-chunk: scale * (q * exp(g)) @ h
     b_g_f32 = b_g.astype(jnp.float32)
@@ -359,27 +395,33 @@ def chunk_gla_fwd_o_gk_pl_kernel(
         b_qg = (b_q * jnp.exp2(b_g_f32)).astype(b_q.dtype)
     else:
         b_qg = (b_q * jnp.exp(b_g_f32)).astype(b_q.dtype)
-    b_o = jnp.dot(b_qg, b_h.astype(b_qg.dtype),
-                  precision=jax.lax.Precision.HIGHEST,
-                  preferred_element_type=jnp.float32)
+    b_o = jnp.dot(
+        b_qg,
+        b_h.astype(b_qg.dtype),
+        precision=jax.lax.Precision.HIGHEST,
+        preferred_element_type=jnp.float32,
+    )
     b_o *= scale
 
     # Intra-chunk: tril(A) @ v
     m_s = jnp.arange(BT)[:, None] >= jnp.arange(BT)[None, :]
     b_A = jnp.where(m_s, b_A, 0.0).astype(b_A.dtype)
-    b_o += jnp.dot(b_A, b_v,
-                   precision=jax.lax.Precision.HIGHEST,
-                   preferred_element_type=jnp.float32)
+    b_o += jnp.dot(
+        b_A,
+        b_v,
+        precision=jax.lax.Precision.HIGHEST,
+        preferred_element_type=jnp.float32,
+    )
 
     o_ref[0, 0] = b_o.astype(o_ref.dtype)
 
 
 def chunk_gla_fwd_o_gk_pl(
-    q: jax.Array,          # [B, T, H, K]
-    v: jax.Array,          # [B, T, H, V]
-    g: jax.Array,          # [B, T, H, K]
-    A: jax.Array,          # [B, T, H, BT]
-    h: jax.Array,          # [B, NT, H, K, V]
+    q: jax.Array,  # [B, T, H, K]
+    v: jax.Array,  # [B, T, H, V]
+    g: jax.Array,  # [B, T, H, K]
+    A: jax.Array,  # [B, T, H, BT]
+    h: jax.Array,  # [B, NT, H, K, V]
     scale: float,
     chunk_size: int,
     use_exp2: bool,
@@ -400,7 +442,11 @@ def chunk_gla_fwd_o_gk_pl(
     _q = q.reshape(B, NT, BT, H, K).transpose(3, 0, 1, 2, 4).reshape(H, total_NT, BT, K)
     _g = g.reshape(B, NT, BT, H, K).transpose(3, 0, 1, 2, 4).reshape(H, total_NT, BT, K)
     _v = v.reshape(B, NT, BT, H, V).transpose(3, 0, 1, 2, 4).reshape(H, total_NT, BT, V)
-    _A = A.reshape(B, NT, BT, H, BT).transpose(3, 0, 1, 2, 4).reshape(H, total_NT, BT, BT)
+    _A = (
+        A.reshape(B, NT, BT, H, BT)
+        .transpose(3, 0, 1, 2, 4)
+        .reshape(H, total_NT, BT, BT)
+    )
     # h: [B, NT, H, K, V] -> [H, B*NT, K, V]
     _h = h.transpose(2, 0, 1, 3, 4).reshape(H, total_NT, K, V)
 
@@ -431,19 +477,19 @@ def chunk_gla_fwd_o_gk_pl(
     # Post-process: (H, total_NT, BT, V) -> (B, T, H, V)
     # total_NT = B * NT
     o = o.reshape(H, B, NT, BT, V)
-    o = o.transpose(1, 0, 2, 3, 4)    # (B, H, NT, BT, V)
-    o = o.reshape(B, H, NT * BT, V)   # (B, H, T, V)
-    o = o.transpose(0, 2, 1, 3)       # (B, T, H, V)
+    o = o.transpose(1, 0, 2, 3, 4)  # (B, H, NT, BT, V)
+    o = o.reshape(B, H, NT * BT, V)  # (B, H, T, V)
+    o = o.transpose(0, 2, 1, 3)  # (B, T, H, V)
 
     return o
 
 
 def chunk_gla_fwd_o_gk(
-    q: jax.Array,          # [B, T, H, K]
-    v: jax.Array,          # [B, T, H, V]
-    g: jax.Array,          # [B, T, H, K]
-    A: jax.Array,          # [B, T, H, BT]
-    h: jax.Array,          # [B, NT, H, K, V]
+    q: jax.Array,  # [B, T, H, K]
+    v: jax.Array,  # [B, T, H, V]
+    g: jax.Array,  # [B, T, H, K]
+    A: jax.Array,  # [B, T, H, BT]
+    h: jax.Array,  # [B, NT, H, K, V]
     scale: float,
     cu_seqlens: jax.Array | None = None,
     chunk_indices: jax.Array | None = None,
@@ -459,5 +505,12 @@ def chunk_gla_fwd_o_gk(
     assert T % chunk_size == 0
 
     return chunk_gla_fwd_o_gk_pl(
-        q, v, g, A, h, scale, chunk_size, use_exp2,
+        q,
+        v,
+        g,
+        A,
+        h,
+        scale,
+        chunk_size,
+        use_exp2,
     )

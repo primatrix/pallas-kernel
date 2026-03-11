@@ -37,12 +37,14 @@ def naive_recurrent_gla(
     """
     dtype = q.dtype
     # transpose: [B, T, H, K/V] -> [B, H, T, K/V], float32 calculation
-    q, k, v, gk = (jnp.transpose(x, (0, 2, 1, 3)).astype(jnp.float32) for x in (q, k, v, gk))
+    q, k, v, gk = (
+        jnp.transpose(x, (0, 2, 1, 3)).astype(jnp.float32) for x in (q, k, v, gk)
+    )
     B, H, T_total, K = q.shape
     V = v.shape[-1]
 
     if scale is None:
-        scale = K ** -0.5
+        scale = K**-0.5
 
     if cu_seqlens is not None:
         assert B == 1, "cu_seqlens requires B=1"
@@ -62,7 +64,7 @@ def naive_recurrent_gla(
 
             h = jnp.zeros((1, H, K, V), dtype=jnp.float32)
             if initial_state is not None:
-                h = h + initial_state[i:i+1].astype(jnp.float32)
+                h = h + initial_state[i : i + 1].astype(jnp.float32)
 
             for t in range(seg_len):
                 q_t = q_seg[:, :, t] * scale
