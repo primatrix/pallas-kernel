@@ -16,7 +16,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-os.environ.setdefault('JAX_PLATFORMS', 'cpu')
+os.environ.setdefault("JAX_PLATFORMS", "cpu")
 
 import torch
 import torch.nn.functional as F
@@ -49,6 +49,7 @@ from src.jax.modules.convolution import ShortConvolution as JaxShortConv
 # Conversion utilities
 # =============================================================================
 
+
 def t2j(t: torch.Tensor) -> jnp.ndarray:
     """PyTorch tensor → JAX array."""
     return jnp.array(t.detach().cpu().numpy())
@@ -67,6 +68,7 @@ def t2n(t: torch.Tensor) -> np.ndarray:
 # =============================================================================
 # Weight transfer: PyTorch → JAX
 # =============================================================================
+
 
 def set_linear(jax_linear: nnx.Linear, pt_linear: torch.nn.Linear):
     """Copy weights from PyTorch Linear to JAX nnx.Linear.
@@ -122,7 +124,8 @@ def transfer_gla_weights(jax_model: JaxGLA, pt_model: TorchGLA):
     if pt_model.fuse_norm_and_gate:
         if pt_model.g_norm_swish_gate.weight is not None:
             jax_model.g_norm_swish_gate.weight.value = t2j(
-                pt_model.g_norm_swish_gate.weight)
+                pt_model.g_norm_swish_gate.weight
+            )
     else:
         if pt_model.g_norm.weight is not None:
             jax_model.g_norm.weight.value = t2j(pt_model.g_norm.weight)
@@ -131,6 +134,7 @@ def transfer_gla_weights(jax_model: JaxGLA, pt_model: TorchGLA):
 # =============================================================================
 # Adaptive tolerance (same scheme as check_fused_recurrent_fwd.py)
 # =============================================================================
+
 
 def get_tolerance(K: int, V: int, T: int, is_layer: bool = False):
     """Compute adaptive atol/rtol.
@@ -155,7 +159,9 @@ def get_tolerance(K: int, V: int, T: int, is_layer: bool = False):
     return atol, rtol
 
 
-def compare_arrays(name: str, a_np: np.ndarray, b_np: np.ndarray, atol: float, rtol: float) -> bool:
+def compare_arrays(
+    name: str, a_np: np.ndarray, b_np: np.ndarray, atol: float, rtol: float
+) -> bool:
     """Compare two numpy arrays with detailed reporting.
 
     Returns True if match, False otherwise.
@@ -185,6 +191,7 @@ def compare_arrays(name: str, a_np: np.ndarray, b_np: np.ndarray, atol: float, r
 # Test: Core kernel comparison
 # =============================================================================
 
+
 def run_test_kernel(
     B: int,
     T: int,
@@ -199,8 +206,10 @@ def run_test_kernel(
     """Compare naive_recurrent_gla: PyTorch CPU vs JAX."""
     print(f"\n{'=' * 55}")
     print(f"Kernel Test: B={B}, T={T}, H={H}, K={K}, V={V}")
-    print(f"  cu_seqlens={cu_seqlens_list}, init_state={use_initial_state}, "
-          f"final_state={output_final_state}")
+    print(
+        f"  cu_seqlens={cu_seqlens_list}, init_state={use_initial_state}, "
+        f"final_state={output_final_state}"
+    )
     print(f"{'=' * 55}")
 
     torch.manual_seed(42)
@@ -219,12 +228,17 @@ def run_test_kernel(
         cu_seqlens_np = None
         N = B
 
-    initial_state_pt = torch.randn(N, H, K, V, dtype=torch.float32) if use_initial_state else None
-    s = scale if scale is not None else K ** -0.5
+    initial_state_pt = (
+        torch.randn(N, H, K, V, dtype=torch.float32) if use_initial_state else None
+    )
+    s = scale if scale is not None else K**-0.5
 
     # --- PyTorch ---
     pt_o, pt_ht = torch_naive_recurrent_gla(
-        q=q_pt, k=k_pt, v=v_pt, gk=gk_pt,
+        q=q_pt,
+        k=k_pt,
+        v=v_pt,
+        gk=gk_pt,
         scale=s,
         initial_state=initial_state_pt,
         output_final_state=output_final_state,
@@ -239,7 +253,10 @@ def run_test_kernel(
     h0_jax = t2j(initial_state_pt) if initial_state_pt is not None else None
 
     jax_o, jax_ht = jax_naive_recurrent_gla(
-        q=q_jax, k=k_jax, v=v_jax, gk=gk_jax,
+        q=q_jax,
+        k=k_jax,
+        v=v_jax,
+        gk=gk_jax,
         scale=s,
         initial_state=h0_jax,
         output_final_state=output_final_state,
@@ -269,6 +286,7 @@ def run_test_kernel(
 # Test: Full layer comparison
 # =============================================================================
 
+
 def run_test_layer(
     B: int,
     T: int,
@@ -281,7 +299,7 @@ def run_test_layer(
     conv_size: int = 4,
     conv_bias: bool = False,
     use_output_gate: bool = True,
-    gate_fn: str = 'swish',
+    gate_fn: str = "swish",
     fuse_norm: bool = True,
     feature_map: str | None = None,
     gate_logit_normalizer: int = 16,
@@ -294,14 +312,16 @@ def run_test_layer(
     print(f"Layer Test: B={B}, T={T}, H_size={hidden_size}, heads={num_heads}")
     print(f"  kv_heads={num_kv_heads}, expand_k={expand_k}, expand_v={expand_v}")
     print(f"  conv={use_short_conv}, gate={use_output_gate}, fuse={fuse_norm}")
-    print(f"  conv_bias={conv_bias}, affine={elementwise_affine}, low_rank={gate_low_rank_dim}")
+    print(
+        f"  conv_bias={conv_bias}, affine={elementwise_affine}, low_rank={gate_low_rank_dim}"
+    )
     print(f"{'=' * 55}")
 
     torch.manual_seed(42)
 
     # --- Create PyTorch model ---
     pt_model = TorchGLA(
-        mode='chunk',
+        mode="chunk",
         hidden_size=hidden_size,
         expand_k=expand_k,
         expand_v=expand_v,
@@ -323,7 +343,7 @@ def run_test_layer(
 
     # --- Create JAX model ---
     jax_model = JaxGLA(
-        mode='chunk',
+        mode="chunk",
         hidden_size=hidden_size,
         expand_k=expand_k,
         expand_v=expand_v,
@@ -378,6 +398,7 @@ def run_test_layer(
 # Test: Varlen equivalence (JAX side)
 # =============================================================================
 
+
 def run_test_varlen_equiv(T: int, H: int, K: int, V: int) -> bool:
     """Single-seq varlen (cu_seqlens=[0,T]) == non-varlen B=1, JAX side."""
     print(f"\n{'=' * 55}")
@@ -392,8 +413,12 @@ def run_test_varlen_equiv(T: int, H: int, K: int, V: int) -> bool:
     h0 = jnp.array(np.random.randn(1, H, K, V).astype(np.float32))
     cu = np.array([0, T], dtype=np.int64)
 
-    o_nv, ht_nv = jax_naive_recurrent_gla(q, k, v, gk, initial_state=h0, output_final_state=True)
-    o_vl, ht_vl = jax_naive_recurrent_gla(q, k, v, gk, initial_state=h0, output_final_state=True, cu_seqlens=cu)
+    o_nv, ht_nv = jax_naive_recurrent_gla(
+        q, k, v, gk, initial_state=h0, output_final_state=True
+    )
+    o_vl, ht_vl = jax_naive_recurrent_gla(
+        q, k, v, gk, initial_state=h0, output_final_state=True, cu_seqlens=cu
+    )
 
     ok_o = np.allclose(j2n(o_nv), j2n(o_vl), atol=1e-6)
     ok_ht = np.allclose(j2n(ht_nv), j2n(ht_vl), atol=1e-6)
@@ -411,6 +436,7 @@ def run_test_varlen_equiv(T: int, H: int, K: int, V: int) -> bool:
 # Test: State split consistency (JAX side)
 # =============================================================================
 
+
 def run_test_state_split(B: int, T: int, H: int, K: int, V: int) -> bool:
     """Split sequence processing == full sequence, both frameworks."""
     print(f"\n{'=' * 55}")
@@ -426,11 +452,21 @@ def run_test_state_split(B: int, T: int, H: int, K: int, V: int) -> bool:
     gk = jax.nn.log_sigmoid(jnp.array(np.random.randn(B, T, H, K).astype(np.float32)))
 
     o_full, s_full = jax_naive_recurrent_gla(q, k, v, gk, output_final_state=True)
-    o1, s1 = jax_naive_recurrent_gla(q[:, :T1], k[:, :T1], v[:, :T1], gk[:, :T1], output_final_state=True)
-    o2, s2 = jax_naive_recurrent_gla(q[:, T1:], k[:, T1:], v[:, T1:], gk[:, T1:], initial_state=s1, output_final_state=True)
+    o1, s1 = jax_naive_recurrent_gla(
+        q[:, :T1], k[:, :T1], v[:, :T1], gk[:, :T1], output_final_state=True
+    )
+    o2, s2 = jax_naive_recurrent_gla(
+        q[:, T1:],
+        k[:, T1:],
+        v[:, T1:],
+        gk[:, T1:],
+        initial_state=s1,
+        output_final_state=True,
+    )
 
-    ok_o = np.allclose(j2n(o_full[:, :T1]), j2n(o1), atol=1e-5) and \
-           np.allclose(j2n(o_full[:, T1:]), j2n(o2), atol=1e-5)
+    ok_o = np.allclose(j2n(o_full[:, :T1]), j2n(o1), atol=1e-5) and np.allclose(
+        j2n(o_full[:, T1:]), j2n(o2), atol=1e-5
+    )
     ok_s = np.allclose(j2n(s_full), j2n(s2), atol=1e-5)
     ok = ok_o and ok_s
     if ok:
@@ -443,6 +479,7 @@ def run_test_state_split(B: int, T: int, H: int, K: int, V: int) -> bool:
 # =============================================================================
 # Test: RMSNorm cross-framework
 # =============================================================================
+
 
 def run_test_rmsnorm() -> bool:
     """Compare RMSNorm: PyTorch vs JAX."""
@@ -472,6 +509,7 @@ def run_test_rmsnorm() -> bool:
 # Test: FusedRMSNormGated cross-framework
 # =============================================================================
 
+
 def run_test_fused_norm_gated() -> bool:
     """Compare FusedRMSNormGated: PyTorch vs JAX."""
     print(f"\n{'=' * 55}")
@@ -480,7 +518,9 @@ def run_test_fused_norm_gated() -> bool:
 
     torch.manual_seed(0)
     pt_fng = TorchFNG(64, elementwise_affine=True, eps=1e-5)
-    jax_fng = JaxFusedRMSNormGated(64, elementwise_affine=True, eps=1e-5, rngs=nnx.Rngs(0))
+    jax_fng = JaxFusedRMSNormGated(
+        64, elementwise_affine=True, eps=1e-5, rngs=nnx.Rngs(0)
+    )
     jax_fng.weight.value = t2j(pt_fng.weight)
 
     x_np = np.random.randn(2, 10, 64).astype(np.float32)
@@ -498,6 +538,7 @@ def run_test_fused_norm_gated() -> bool:
 # =============================================================================
 # Test: RMSNorm no affine (cross-framework)
 # =============================================================================
+
 
 def run_test_rmsnorm_no_affine() -> bool:
     """RMSNorm with elementwise_affine=False, cross-framework."""
@@ -522,6 +563,7 @@ def run_test_rmsnorm_no_affine() -> bool:
 # Test: FusedRMSNormGated no affine (cross-framework)
 # =============================================================================
 
+
 def run_test_fused_norm_gated_no_affine() -> bool:
     """FusedRMSNormGated with elementwise_affine=False, cross-framework."""
     print(f"\n{'=' * 55}")
@@ -529,7 +571,9 @@ def run_test_fused_norm_gated_no_affine() -> bool:
     print(f"{'=' * 55}")
 
     pt_fng = TorchFNG(64, elementwise_affine=False, eps=1e-5)
-    jax_fng = JaxFusedRMSNormGated(64, elementwise_affine=False, eps=1e-5, rngs=nnx.Rngs(0))
+    jax_fng = JaxFusedRMSNormGated(
+        64, elementwise_affine=False, eps=1e-5, rngs=nnx.Rngs(0)
+    )
 
     x_np = np.random.RandomState(0).randn(2, 10, 64).astype(np.float32)
     g_np = np.random.RandomState(1).randn(2, 10, 64).astype(np.float32)
@@ -537,7 +581,9 @@ def run_test_fused_norm_gated_no_affine() -> bool:
     pt_y = pt_fng(torch.tensor(x_np), torch.tensor(g_np))
     jax_y = jax_fng(jnp.array(x_np), jnp.array(g_np))
 
-    ok = compare_arrays("FusedRMSNormGated(no_affine)", t2n(pt_y), j2n(jax_y), 1e-6, 1e-6)
+    ok = compare_arrays(
+        "FusedRMSNormGated(no_affine)", t2n(pt_y), j2n(jax_y), 1e-6, 1e-6
+    )
     if ok:
         print("\n  ✅ MATCH")
     return ok
@@ -547,11 +593,12 @@ def run_test_fused_norm_gated_no_affine() -> bool:
 # Test: ShortConvolution cross-framework
 # =============================================================================
 
+
 def run_test_short_conv_xf(
     D: int = 64,
     K_size: int = 4,
     T: int = 16,
-    activation: str | None = 'silu',
+    activation: str | None = "silu",
     bias: bool = False,
 ) -> bool:
     """Cross-framework ShortConvolution comparison."""
@@ -561,10 +608,15 @@ def run_test_short_conv_xf(
 
     torch.manual_seed(0)
     pt_conv = TorchShortConv(
-        hidden_size=D, kernel_size=K_size, bias=bias, activation=activation)
+        hidden_size=D, kernel_size=K_size, bias=bias, activation=activation
+    )
     jax_conv = JaxShortConv(
-        hidden_size=D, kernel_size=K_size, bias=bias, activation=activation,
-        rngs=nnx.Rngs(0))
+        hidden_size=D,
+        kernel_size=K_size,
+        bias=bias,
+        activation=activation,
+        rngs=nnx.Rngs(0),
+    )
     set_conv(jax_conv, pt_conv)
 
     x_np = np.random.RandomState(42).randn(2, T, D).astype(np.float32)
@@ -582,6 +634,7 @@ def run_test_short_conv_xf(
 # Test: ShortConvolution with cache prefix (JAX consistency)
 # =============================================================================
 
+
 def run_test_short_conv_cache() -> bool:
     """ShortConv with cache prefix — staged == full (JAX)."""
     print(f"\n{'=' * 55}")
@@ -592,7 +645,8 @@ def run_test_short_conv_cache() -> bool:
     T1, T2 = 8, 8
     T = T1 + T2
     conv = JaxShortConv(
-        hidden_size=D, kernel_size=K_size, activation='silu', rngs=nnx.Rngs(0))
+        hidden_size=D, kernel_size=K_size, activation="silu", rngs=nnx.Rngs(0)
+    )
     x = jnp.array(np.random.RandomState(42).randn(B, T, D).astype(np.float32))
 
     # Full forward
@@ -600,7 +654,7 @@ def run_test_short_conv_cache() -> bool:
 
     # Two-stage with cache: pass last (K-1) tokens of first chunk as cache
     y1, _ = conv(x[:, :T1, :])
-    cache = x[:, T1 - (K_size - 1):T1, :]  # [B, K-1, D]
+    cache = x[:, T1 - (K_size - 1) : T1, :]  # [B, K-1, D]
     y2, _ = conv(x[:, T1:, :], cache=cache)
 
     y_staged = jnp.concatenate([y1, y2], axis=1)
@@ -618,6 +672,7 @@ def run_test_short_conv_cache() -> bool:
 # Test: ShortConvolution short seq (T < kernel_size - 1)
 # =============================================================================
 
+
 def run_test_short_conv_short_seq() -> bool:
     """ShortConv output_final_state when T < kernel_size - 1."""
     print(f"\n{'=' * 55}")
@@ -626,7 +681,8 @@ def run_test_short_conv_short_seq() -> bool:
 
     D, K_size, B, T = 16, 4, 1, 2  # T=2 < K-1=3
     conv = JaxShortConv(
-        hidden_size=D, kernel_size=K_size, activation='silu', rngs=nnx.Rngs(0))
+        hidden_size=D, kernel_size=K_size, activation="silu", rngs=nnx.Rngs(0)
+    )
     x = jnp.array(np.random.RandomState(0).randn(B, T, D).astype(np.float32))
 
     y, cache = conv(x, output_final_state=True)
@@ -655,6 +711,7 @@ def run_test_short_conv_short_seq() -> bool:
 # Test: ShortConvolution step-by-step (JAX consistency)
 # =============================================================================
 
+
 def run_test_short_conv_step() -> bool:
     """ShortConv step-by-step vs full forward (JAX)."""
     print(f"\n{'=' * 55}")
@@ -663,7 +720,8 @@ def run_test_short_conv_step() -> bool:
 
     D, K_size, T, B = 32, 4, 12, 2
     conv = JaxShortConv(
-        hidden_size=D, kernel_size=K_size, activation='silu', rngs=nnx.Rngs(0))
+        hidden_size=D, kernel_size=K_size, activation="silu", rngs=nnx.Rngs(0)
+    )
     x = jnp.array(np.random.RandomState(0).randn(B, T, D).astype(np.float32))
 
     # Full forward
@@ -673,7 +731,7 @@ def run_test_short_conv_step() -> bool:
     cache = None
     y_steps = []
     for t in range(T):
-        x_t = x[:, t:t + 1, :]  # [B, 1, D]
+        x_t = x[:, t : t + 1, :]  # [B, 1, D]
         y_t, cache = conv.step(x_t, cache, output_final_state=True)
         y_steps.append(y_t)
     y_step = jnp.concatenate(y_steps, axis=1)
@@ -691,6 +749,7 @@ def run_test_short_conv_step() -> bool:
 # Test: ShortConvolution varlen cross-framework
 # =============================================================================
 
+
 def run_test_short_conv_varlen_xf() -> bool:
     """Cross-framework ShortConvolution with cu_seqlens."""
     print(f"\n{'=' * 55}")
@@ -701,17 +760,16 @@ def run_test_short_conv_varlen_xf() -> bool:
     cu_list = [0, 8, 16, 24]
 
     torch.manual_seed(0)
-    pt_conv = TorchShortConv(hidden_size=D, kernel_size=K_size, activation='silu')
+    pt_conv = TorchShortConv(hidden_size=D, kernel_size=K_size, activation="silu")
     jax_conv = JaxShortConv(
-        hidden_size=D, kernel_size=K_size, activation='silu', rngs=nnx.Rngs(0))
+        hidden_size=D, kernel_size=K_size, activation="silu", rngs=nnx.Rngs(0)
+    )
     set_conv(jax_conv, pt_conv)
 
     x_np = np.random.RandomState(42).randn(1, T_total, D).astype(np.float32)
     with torch.no_grad():
-        pt_y, _ = pt_conv(
-            torch.tensor(x_np), cu_seqlens=torch.LongTensor(cu_list))
-    jax_y, _ = jax_conv(
-        jnp.array(x_np), cu_seqlens=np.array(cu_list, dtype=np.int64))
+        pt_y, _ = pt_conv(torch.tensor(x_np), cu_seqlens=torch.LongTensor(cu_list))
+    jax_y, _ = jax_conv(jnp.array(x_np), cu_seqlens=np.array(cu_list, dtype=np.int64))
 
     ok = compare_arrays("ShortConv varlen", t2n(pt_y), j2n(jax_y), 1e-5, 1e-5)
     if ok:
@@ -723,6 +781,7 @@ def run_test_short_conv_varlen_xf() -> bool:
 # Test: Layer with cu_seqlens (cross-framework)
 # =============================================================================
 
+
 def run_test_layer_cu_seqlens(
     T_total: int = 48,
     hidden_size: int = 128,
@@ -733,26 +792,38 @@ def run_test_layer_cu_seqlens(
 ) -> bool:
     """Full GLA layer with cu_seqlens, cross-framework."""
     print(f"\n{'=' * 55}")
-    print(f"Layer cu_seqlens: T={T_total}, H_size={hidden_size}, "
-          f"heads={num_heads}, kv_heads={num_kv_heads}, conv={use_short_conv}")
+    print(
+        f"Layer cu_seqlens: T={T_total}, H_size={hidden_size}, "
+        f"heads={num_heads}, kv_heads={num_kv_heads}, conv={use_short_conv}"
+    )
     print(f"{'=' * 55}")
 
     torch.manual_seed(42)
     cu_list = [0, 16, 32, T_total]
 
     pt_model = TorchGLA(
-        mode='chunk', hidden_size=hidden_size, num_heads=num_heads,
+        mode="chunk",
+        hidden_size=hidden_size,
+        num_heads=num_heads,
         num_kv_heads=num_kv_heads,
-        use_short_conv=use_short_conv, conv_size=conv_size,
-        use_output_gate=True, gate_fn='swish', fuse_norm=True,
+        use_short_conv=use_short_conv,
+        conv_size=conv_size,
+        use_output_gate=True,
+        gate_fn="swish",
+        fuse_norm=True,
     )
     pt_model.eval()
 
     jax_model = JaxGLA(
-        mode='chunk', hidden_size=hidden_size, num_heads=num_heads,
+        mode="chunk",
+        hidden_size=hidden_size,
+        num_heads=num_heads,
         num_kv_heads=num_kv_heads,
-        use_short_conv=use_short_conv, conv_size=conv_size,
-        use_output_gate=True, gate_fn='swish', fuse_norm=True,
+        use_short_conv=use_short_conv,
+        conv_size=conv_size,
+        use_output_gate=True,
+        gate_fn="swish",
+        fuse_norm=True,
         rngs=nnx.Rngs(0),
     )
     transfer_gla_weights(jax_model, pt_model)
@@ -761,17 +832,19 @@ def run_test_layer_cu_seqlens(
 
     with torch.no_grad():
         pt_out, _, _ = pt_model(
-            torch.tensor(x_np),
-            cu_seqlens=torch.LongTensor(cu_list))
+            torch.tensor(x_np), cu_seqlens=torch.LongTensor(cu_list)
+        )
     jax_out, _, _ = jax_model(
-        jnp.array(x_np),
-        cu_seqlens=np.array(cu_list, dtype=np.int64))
+        jnp.array(x_np), cu_seqlens=np.array(cu_list, dtype=np.int64)
+    )
 
     head_k = int(hidden_size * 0.5) // num_heads
     head_v = hidden_size // num_heads
     atol, rtol = get_tolerance(head_k, head_v, T_total, is_layer=True)
 
-    ok = compare_arrays("Layer output (cu_seqlens)", t2n(pt_out), j2n(jax_out), atol, rtol)
+    ok = compare_arrays(
+        "Layer output (cu_seqlens)", t2n(pt_out), j2n(jax_out), atol, rtol
+    )
     if ok:
         print("\n  ✅ MATCH")
     else:
@@ -782,6 +855,7 @@ def run_test_layer_cu_seqlens(
 # =============================================================================
 # Test: ShortConvolution step cross-framework
 # =============================================================================
+
 
 def run_test_short_conv_step_xf() -> bool:
     """Cross-framework ShortConv step-by-step output comparison.
@@ -795,9 +869,10 @@ def run_test_short_conv_step_xf() -> bool:
 
     D, K_size, T, B = 32, 4, 10, 2
     torch.manual_seed(0)
-    pt_conv = TorchShortConv(hidden_size=D, kernel_size=K_size, activation='silu')
+    pt_conv = TorchShortConv(hidden_size=D, kernel_size=K_size, activation="silu")
     jax_conv = JaxShortConv(
-        hidden_size=D, kernel_size=K_size, activation='silu', rngs=nnx.Rngs(0))
+        hidden_size=D, kernel_size=K_size, activation="silu", rngs=nnx.Rngs(0)
+    )
     set_conv(jax_conv, pt_conv)
 
     x_np = np.random.RandomState(42).randn(B, T, D).astype(np.float32)
@@ -806,7 +881,7 @@ def run_test_short_conv_step_xf() -> bool:
     pt_cache = None
     pt_steps = []
     for t in range(T):
-        x_t = torch.tensor(x_np[:, t:t + 1, :])
+        x_t = torch.tensor(x_np[:, t : t + 1, :])
         with torch.no_grad():
             y_t, pt_cache = pt_conv.step(x_t, pt_cache, output_final_state=True)
         pt_steps.append(t2n(y_t))
@@ -815,7 +890,7 @@ def run_test_short_conv_step_xf() -> bool:
     jax_cache = None
     jax_steps = []
     for t in range(T):
-        x_t = jnp.array(x_np[:, t:t + 1, :])
+        x_t = jnp.array(x_np[:, t : t + 1, :])
         y_t, jax_cache = jax_conv.step(x_t, jax_cache, output_final_state=True)
         jax_steps.append(j2n(y_t))
 
@@ -832,6 +907,7 @@ def run_test_short_conv_step_xf() -> bool:
 # Test: ShortConv varlen with short segment (seg_len < W-1) final_state
 # =============================================================================
 
+
 def run_test_short_conv_varlen_short_seg() -> bool:
     """ShortConv varlen with segments shorter than kernel_size-1.
 
@@ -847,12 +923,13 @@ def run_test_short_conv_varlen_short_seg() -> bool:
     T_total = 8
 
     conv = JaxShortConv(
-        hidden_size=D, kernel_size=K_size, activation='silu', rngs=nnx.Rngs(0))
+        hidden_size=D, kernel_size=K_size, activation="silu", rngs=nnx.Rngs(0)
+    )
     x = jnp.array(np.random.RandomState(0).randn(1, T_total, D).astype(np.float32))
 
     y, cache = conv(
-        x, output_final_state=True,
-        cu_seqlens=np.array(cu_list, dtype=np.int64))
+        x, output_final_state=True, cu_seqlens=np.array(cu_list, dtype=np.int64)
+    )
 
     ok = True
     # Output shape
@@ -898,6 +975,7 @@ def run_test_short_conv_varlen_short_seg() -> bool:
 # Test: ShortConv final_state cross-framework
 # =============================================================================
 
+
 def run_test_short_conv_final_state_xf() -> bool:
     """Cross-framework ShortConv output_final_state comparison.
 
@@ -911,9 +989,10 @@ def run_test_short_conv_final_state_xf() -> bool:
 
     D, K_size, T, B = 32, 4, 12, 2
     torch.manual_seed(0)
-    pt_conv = TorchShortConv(hidden_size=D, kernel_size=K_size, activation='silu')
+    pt_conv = TorchShortConv(hidden_size=D, kernel_size=K_size, activation="silu")
     jax_conv = JaxShortConv(
-        hidden_size=D, kernel_size=K_size, activation='silu', rngs=nnx.Rngs(0))
+        hidden_size=D, kernel_size=K_size, activation="silu", rngs=nnx.Rngs(0)
+    )
     set_conv(jax_conv, pt_conv)
 
     x_np = np.random.RandomState(42).randn(B, T, D).astype(np.float32)
@@ -938,7 +1017,8 @@ def run_test_short_conv_final_state_xf() -> bool:
     jax_cache_tokens = j2n(jax_cache)  # [B, W-1, D]
 
     ok_cache = compare_arrays(
-        "ShortConv final_state (tokens)", pt_cache_tokens, jax_cache_tokens, 1e-6, 1e-6)
+        "ShortConv final_state (tokens)", pt_cache_tokens, jax_cache_tokens, 1e-6, 1e-6
+    )
     ok = ok and ok_cache
 
     if ok:
@@ -950,6 +1030,7 @@ def run_test_short_conv_final_state_xf() -> bool:
 # Test: ShortConv activation='swish' alias
 # =============================================================================
 
+
 def run_test_short_conv_swish_alias() -> bool:
     """Verify activation='swish' is same as 'silu'."""
     print(f"\n{'=' * 55}")
@@ -958,13 +1039,17 @@ def run_test_short_conv_swish_alias() -> bool:
 
     D, K_size, T, B = 32, 4, 10, 2
     torch.manual_seed(0)
-    pt_silu = TorchShortConv(hidden_size=D, kernel_size=K_size, activation='silu')
-    pt_swish = TorchShortConv(hidden_size=D, kernel_size=K_size, activation='swish')
+    pt_silu = TorchShortConv(hidden_size=D, kernel_size=K_size, activation="silu")
+    pt_swish = TorchShortConv(hidden_size=D, kernel_size=K_size, activation="swish")
     # Copy weights
     pt_swish.weight.data.copy_(pt_silu.weight.data)
 
-    jax_silu = JaxShortConv(hidden_size=D, kernel_size=K_size, activation='silu', rngs=nnx.Rngs(0))
-    jax_swish = JaxShortConv(hidden_size=D, kernel_size=K_size, activation='swish', rngs=nnx.Rngs(0))
+    jax_silu = JaxShortConv(
+        hidden_size=D, kernel_size=K_size, activation="silu", rngs=nnx.Rngs(0)
+    )
+    jax_swish = JaxShortConv(
+        hidden_size=D, kernel_size=K_size, activation="swish", rngs=nnx.Rngs(0)
+    )
     set_conv(jax_silu, pt_silu)
     set_conv(jax_swish, pt_silu)
 
@@ -990,13 +1075,16 @@ def run_test_short_conv_swish_alias() -> bool:
 # Test: PyTorch attention_mask pipeline
 # =============================================================================
 
+
 def run_test_attention_mask_pipeline() -> bool:
     """PyTorch-only: attention_mask should give same output as cu_seqlens.
 
     Tests: get_unpad_data, index_first_axis, pad_input pipeline.
     """
     from src.torch.layers.utils import (
-        get_unpad_data, index_first_axis, pad_input,
+        get_unpad_data,
+        index_first_axis,
+        pad_input,
     )
 
     print(f"\n{'=' * 55}")
@@ -1009,8 +1097,12 @@ def run_test_attention_mask_pipeline() -> bool:
 
     # Create model
     pt_model = TorchGLA(
-        mode='chunk', hidden_size=hidden_size, num_heads=num_heads,
-        use_short_conv=False, use_output_gate=True, gate_fn='swish',
+        mode="chunk",
+        hidden_size=hidden_size,
+        num_heads=num_heads,
+        use_short_conv=False,
+        use_output_gate=True,
+        gate_fn="swish",
         fuse_norm=True,
     )
     pt_model.eval()
@@ -1032,9 +1124,9 @@ def run_test_attention_mask_pipeline() -> bool:
 
     # Method 2: manual unpad → cu_seqlens
     indices, cu_seqlens, max_seqlen = get_unpad_data(mask)
-    x_packed = index_first_axis(
-        x_pt.reshape(B * T, hidden_size), indices
-    ).unsqueeze(0)  # [1, total_valid, hidden_size]
+    x_packed = index_first_axis(x_pt.reshape(B * T, hidden_size), indices).unsqueeze(
+        0
+    )  # [1, total_valid, hidden_size]
 
     with torch.no_grad():
         out_cu, _, _ = pt_model(x_packed, cu_seqlens=cu_seqlens)
@@ -1060,6 +1152,7 @@ def run_test_attention_mask_pipeline() -> bool:
 # Test: PyTorch ShortConv forward auto-step routing
 # =============================================================================
 
+
 def run_test_pt_short_conv_auto_step() -> bool:
     """PyTorch ShortConv.forward auto-routes to step() when B*T == N.
 
@@ -1074,7 +1167,7 @@ def run_test_pt_short_conv_auto_step() -> bool:
     B = 2  # N = B since no cu_seqlens
 
     torch.manual_seed(0)
-    pt_conv = TorchShortConv(hidden_size=D, kernel_size=K_size, activation='silu')
+    pt_conv = TorchShortConv(hidden_size=D, kernel_size=K_size, activation="silu")
 
     x_np = np.random.RandomState(42).randn(B, 1, D).astype(np.float32)
     x_pt = torch.tensor(x_np)
@@ -1126,6 +1219,7 @@ def run_test_pt_short_conv_auto_step() -> bool:
 # Test: ShortConv step edge-case branches
 # =============================================================================
 
+
 def run_test_short_conv_step_no_cache_no_output() -> bool:
     """JAX ShortConv.step with cache=None, output_final_state=False.
 
@@ -1137,7 +1231,8 @@ def run_test_short_conv_step_no_cache_no_output() -> bool:
 
     D, K_size, B = 32, 4, 2
     jax_conv = JaxShortConv(
-        hidden_size=D, kernel_size=K_size, activation='silu', rngs=nnx.Rngs(0))
+        hidden_size=D, kernel_size=K_size, activation="silu", rngs=nnx.Rngs(0)
+    )
 
     x_np = np.random.RandomState(0).randn(B, 1, D).astype(np.float32)
     x = jnp.array(x_np)
@@ -1171,7 +1266,8 @@ def run_test_short_conv_step_discard_cache() -> bool:
 
     D, K_size, B = 32, 4, 2
     jax_conv = JaxShortConv(
-        hidden_size=D, kernel_size=K_size, activation='silu', rngs=nnx.Rngs(0))
+        hidden_size=D, kernel_size=K_size, activation="silu", rngs=nnx.Rngs(0)
+    )
 
     x_np = np.random.RandomState(0).randn(B, 1, D).astype(np.float32)
     x = jnp.array(x_np)
@@ -1199,7 +1295,7 @@ def run_test_short_conv_step_discard_cache() -> bool:
         ok = False
 
     if ok:
-        print(f"  Output matches, new_cache correctly None")
+        print("  Output matches, new_cache correctly None")
         print("  ✅ step(cache!=None, output_final_state=False) correct")
     return ok
 
@@ -1207,6 +1303,7 @@ def run_test_short_conv_step_discard_cache() -> bool:
 # =============================================================================
 # Test: PyTorch ShortConv step no-cache else branch
 # =============================================================================
+
 
 def run_test_pt_short_conv_step_no_cache() -> bool:
     """PyTorch ShortConv.step with no cache, no output_final_state.
@@ -1219,7 +1316,7 @@ def run_test_pt_short_conv_step_no_cache() -> bool:
 
     D, K_size, B = 32, 4, 2
     torch.manual_seed(0)
-    pt_conv = TorchShortConv(hidden_size=D, kernel_size=K_size, activation='silu')
+    pt_conv = TorchShortConv(hidden_size=D, kernel_size=K_size, activation="silu")
 
     x_np = np.random.RandomState(0).randn(B, 1, D).astype(np.float32)
     x_pt = torch.tensor(x_np)
@@ -1232,7 +1329,7 @@ def run_test_pt_short_conv_step_no_cache() -> bool:
         print(f"  ❌ output shape: {y.shape}")
         ok = False
     if cache is not None:
-        print(f"  ❌ cache should be None")
+        print("  ❌ cache should be None")
         ok = False
     if not torch.all(torch.isfinite(y)):
         print("  ❌ non-finite output")
@@ -1247,6 +1344,7 @@ def run_test_pt_short_conv_step_no_cache() -> bool:
 # Test: ShortConv step with bias (cross-framework)
 # =============================================================================
 
+
 def run_test_short_conv_step_bias_xf() -> bool:
     """Cross-framework ShortConv step with bias=True.
 
@@ -1258,10 +1356,16 @@ def run_test_short_conv_step_bias_xf() -> bool:
 
     D, K_size, T, B = 32, 4, 8, 2
     torch.manual_seed(0)
-    pt_conv = TorchShortConv(hidden_size=D, kernel_size=K_size,
-                              bias=True, activation='silu')
-    jax_conv = JaxShortConv(hidden_size=D, kernel_size=K_size,
-                             bias=True, activation='silu', rngs=nnx.Rngs(0))
+    pt_conv = TorchShortConv(
+        hidden_size=D, kernel_size=K_size, bias=True, activation="silu"
+    )
+    jax_conv = JaxShortConv(
+        hidden_size=D,
+        kernel_size=K_size,
+        bias=True,
+        activation="silu",
+        rngs=nnx.Rngs(0),
+    )
     set_conv(jax_conv, pt_conv)
 
     x_np = np.random.RandomState(42).randn(B, T, D).astype(np.float32)
@@ -1272,8 +1376,8 @@ def run_test_short_conv_step_bias_xf() -> bool:
     for t in range(T):
         with torch.no_grad():
             y_t, pt_cache = pt_conv.step(
-                torch.tensor(x_np[:, t:t + 1, :]),
-                pt_cache, output_final_state=True)
+                torch.tensor(x_np[:, t : t + 1, :]), pt_cache, output_final_state=True
+            )
         pt_steps.append(t2n(y_t))
 
     # JAX step-by-step
@@ -1281,8 +1385,8 @@ def run_test_short_conv_step_bias_xf() -> bool:
     jax_steps = []
     for t in range(T):
         y_t, jax_cache = jax_conv.step(
-            jnp.array(x_np[:, t:t + 1, :]),
-            jax_cache, output_final_state=True)
+            jnp.array(x_np[:, t : t + 1, :]), jax_cache, output_final_state=True
+        )
         jax_steps.append(j2n(y_t))
 
     pt_out = np.concatenate(pt_steps, axis=1)
@@ -1298,6 +1402,7 @@ def run_test_short_conv_step_bias_xf() -> bool:
 # Test: PyTorch ShortConv step with cu_seqlens
 # =============================================================================
 
+
 def run_test_pt_short_conv_step_cu_seqlens() -> bool:
     """PyTorch ShortConv.step with cu_seqlens (squeeze(0) path)."""
     print(f"\n{'=' * 55}")
@@ -1308,15 +1413,16 @@ def run_test_pt_short_conv_step_cu_seqlens() -> bool:
     cu_list = torch.LongTensor([0, 1, 2, 3])
 
     torch.manual_seed(0)
-    pt_conv = TorchShortConv(hidden_size=D, kernel_size=K_size, activation='silu')
+    pt_conv = TorchShortConv(hidden_size=D, kernel_size=K_size, activation="silu")
 
     # Input: [1, N, D] where each of N sequences has 1 token
     x_np = np.random.RandomState(0).randn(1, N, D).astype(np.float32)
     x_pt = torch.tensor(x_np)
 
     with torch.no_grad():
-        y, cache = pt_conv.step(x_pt, cache=None, output_final_state=True,
-                                cu_seqlens=cu_list)
+        y, cache = pt_conv.step(
+            x_pt, cache=None, output_final_state=True, cu_seqlens=cu_list
+        )
 
     ok = True
     if y.shape != (1, N, D):
@@ -1342,6 +1448,7 @@ def run_test_pt_short_conv_step_cu_seqlens() -> bool:
 # Test: PyTorch ShortConv short-seq final_state (T < W)
 # =============================================================================
 
+
 def run_test_pt_short_conv_short_seq_final_state() -> bool:
     """PyTorch ShortConv output_final_state when T < W (left-pad branch)."""
     print(f"\n{'=' * 55}")
@@ -1351,7 +1458,7 @@ def run_test_pt_short_conv_short_seq_final_state() -> bool:
     D, K_size, B, T = 16, 4, 2, 2  # T=2 < W=4
 
     torch.manual_seed(0)
-    pt_conv = TorchShortConv(hidden_size=D, kernel_size=K_size, activation='silu')
+    pt_conv = TorchShortConv(hidden_size=D, kernel_size=K_size, activation="silu")
 
     x_np = np.random.RandomState(0).randn(B, T, D).astype(np.float32)
     x_pt = torch.tensor(x_np)
@@ -1393,6 +1500,7 @@ def run_test_pt_short_conv_short_seq_final_state() -> bool:
 # Test: PyTorch ShortConv varlen final_state (cross-framework token equiv)
 # =============================================================================
 
+
 def run_test_short_conv_varlen_final_state_xf() -> bool:
     """Cross-framework ShortConv varlen final_state token equivalence.
 
@@ -1409,20 +1517,25 @@ def run_test_short_conv_varlen_final_state_xf() -> bool:
     T_total = 12
 
     torch.manual_seed(0)
-    pt_conv = TorchShortConv(hidden_size=D, kernel_size=K_size, activation='silu')
+    pt_conv = TorchShortConv(hidden_size=D, kernel_size=K_size, activation="silu")
     jax_conv = JaxShortConv(
-        hidden_size=D, kernel_size=K_size, activation='silu', rngs=nnx.Rngs(0))
+        hidden_size=D, kernel_size=K_size, activation="silu", rngs=nnx.Rngs(0)
+    )
     set_conv(jax_conv, pt_conv)
 
     x_np = np.random.RandomState(42).randn(1, T_total, D).astype(np.float32)
 
     with torch.no_grad():
         pt_y, pt_cache = pt_conv(
-            torch.tensor(x_np), output_final_state=True,
-            cu_seqlens=torch.LongTensor(cu_list))
+            torch.tensor(x_np),
+            output_final_state=True,
+            cu_seqlens=torch.LongTensor(cu_list),
+        )
     jax_y, jax_cache = jax_conv(
-        jnp.array(x_np), output_final_state=True,
-        cu_seqlens=np.array(cu_list, dtype=np.int64))
+        jnp.array(x_np),
+        output_final_state=True,
+        cu_seqlens=np.array(cu_list, dtype=np.int64),
+    )
 
     ok = True
 
@@ -1454,6 +1567,7 @@ def run_test_short_conv_varlen_final_state_xf() -> bool:
 # Test: PyTorch ShortConv forward with pre-allocated cache (cache.copy_)
 # =============================================================================
 
+
 def run_test_pt_short_conv_cache_copy() -> bool:
     """PyTorch ShortConv.forward with pre-allocated cache tensor.
 
@@ -1466,7 +1580,7 @@ def run_test_pt_short_conv_cache_copy() -> bool:
     D, K_size, B, T = 32, 4, 2, 10
 
     torch.manual_seed(0)
-    pt_conv = TorchShortConv(hidden_size=D, kernel_size=K_size, activation='silu')
+    pt_conv = TorchShortConv(hidden_size=D, kernel_size=K_size, activation="silu")
 
     x_np = np.random.RandomState(0).randn(B, T, D).astype(np.float32)
     x_pt = torch.tensor(x_np)
@@ -1508,6 +1622,7 @@ def run_test_pt_short_conv_cache_copy() -> bool:
 # Test: chunk_gla kernel vs naive_recurrent_gla (数学等价性)
 # =============================================================================
 
+
 def run_test_chunk_vs_naive(
     B: int = 2,
     T: int = 64,
@@ -1524,9 +1639,11 @@ def run_test_chunk_vs_naive(
     Both should produce identical results since chunk_gla is a
     mathematically equivalent reformulation of the recurrence.
     """
-    label = (f"chunk_gla vs naive: B={B}, T={T}, H={H}, K={K}, V={V}, "
-             f"C={chunk_size}, init={use_initial_state}, "
-             f"final={output_final_state}, varlen={cu_seqlens_list is not None}")
+    label = (
+        f"chunk_gla vs naive: B={B}, T={T}, H={H}, K={K}, V={V}, "
+        f"C={chunk_size}, init={use_initial_state}, "
+        f"final={output_final_state}, varlen={cu_seqlens_list is not None}"
+    )
     print(f"\n{'=' * 55}")
     print(label)
     print(f"{'=' * 55}")
@@ -1549,7 +1666,10 @@ def run_test_chunk_vs_naive(
 
     # --- naive recurrent ---
     o_naive, ht_naive = torch_naive_recurrent_gla(
-        q=q, k=k, v=v, gk=gk,
+        q=q,
+        k=k,
+        v=v,
+        gk=gk,
         initial_state=initial_state,
         output_final_state=output_final_state,
         cu_seqlens=cu_seqlens,
@@ -1557,7 +1677,10 @@ def run_test_chunk_vs_naive(
 
     # --- chunk ---
     o_chunk, ht_chunk = torch_chunk_gla(
-        q=q, k=k, v=v, g=gk,
+        q=q,
+        k=k,
+        v=v,
+        g=gk,
         initial_state=initial_state,
         output_final_state=output_final_state,
         cu_seqlens=cu_seqlens,
@@ -1593,9 +1716,11 @@ def run_test_fused_chunk_vs_naive(
     fused_chunk_gla is a thin wrapper around chunk_gla, so this
     verifies the wrapper passes parameters correctly.
     """
-    label = (f"fused_chunk_gla vs naive: B={B}, T={T}, H={H}, K={K}, V={V}, "
-             f"init={use_initial_state}, final={output_final_state}, "
-             f"varlen={cu_seqlens_list is not None}")
+    label = (
+        f"fused_chunk_gla vs naive: B={B}, T={T}, H={H}, K={K}, V={V}, "
+        f"init={use_initial_state}, final={output_final_state}, "
+        f"varlen={cu_seqlens_list is not None}"
+    )
     print(f"\n{'=' * 55}")
     print(label)
     print(f"{'=' * 55}")
@@ -1618,7 +1743,10 @@ def run_test_fused_chunk_vs_naive(
 
     # --- naive ---
     o_naive, ht_naive = torch_naive_recurrent_gla(
-        q=q, k=k, v=v, gk=gk,
+        q=q,
+        k=k,
+        v=v,
+        gk=gk,
         initial_state=initial_state,
         output_final_state=output_final_state,
         cu_seqlens=cu_seqlens,
@@ -1626,7 +1754,10 @@ def run_test_fused_chunk_vs_naive(
 
     # --- fused_chunk ---
     o_fc, ht_fc = torch_fused_chunk_gla(
-        q=q, k=k, v=v, g=gk,
+        q=q,
+        k=k,
+        v=v,
+        g=gk,
         initial_state=initial_state,
         output_final_state=output_final_state,
         cu_seqlens=cu_seqlens,
@@ -1664,11 +1795,15 @@ def run_test_chunk_layer_mode() -> bool:
     x_np = np.random.RandomState(42).randn(B, T, hidden_size).astype(np.float32)
 
     results = {}
-    for mode in ['chunk', 'fused_recurrent', 'fused_chunk']:
+    for mode in ["chunk", "fused_recurrent", "fused_chunk"]:
         torch.manual_seed(42)
         model = TorchGLA(
-            mode=mode, hidden_size=hidden_size, num_heads=num_heads,
-            use_short_conv=False, use_output_gate=True, gate_fn='swish',
+            mode=mode,
+            hidden_size=hidden_size,
+            num_heads=num_heads,
+            use_short_conv=False,
+            use_output_gate=True,
+            gate_fn="swish",
             fuse_norm=True,
         )
         model.eval()
@@ -1677,8 +1812,8 @@ def run_test_chunk_layer_mode() -> bool:
         results[mode] = t2n(out)
 
     ok = True
-    diff_cr = np.abs(results['chunk'] - results['fused_recurrent']).max()
-    diff_fc = np.abs(results['chunk'] - results['fused_chunk']).max()
+    diff_cr = np.abs(results["chunk"] - results["fused_recurrent"]).max()
+    diff_fc = np.abs(results["chunk"] - results["fused_chunk"]).max()
     print(f"  chunk vs fused_recurrent: {diff_cr:.2e}")
     print(f"  chunk vs fused_chunk:     {diff_fc:.2e}")
 
@@ -1698,6 +1833,7 @@ def run_test_chunk_layer_mode() -> bool:
 # =============================================================================
 # Test: RMSNorm / FusedRMSNormGated bfloat16 dtype preservation
 # =============================================================================
+
 
 def run_test_norm_bfloat16() -> bool:
     """RMSNorm + FusedRMSNormGated with bfloat16 input — dtype preserved XF.
@@ -1732,12 +1868,15 @@ def run_test_norm_bfloat16() -> bool:
         "RMSNorm bf16",
         pt_y_rms.float().detach().numpy(),
         np.array(jax_y_rms.astype(jnp.float32)),
-        atol=5e-3, rtol=5e-3,
+        atol=5e-3,
+        rtol=5e-3,
     )
 
     # --- FusedRMSNormGated ---
     pt_fng = TorchFNG(D, elementwise_affine=True, eps=1e-5)
-    jax_fng = JaxFusedRMSNormGated(D, elementwise_affine=True, eps=1e-5, rngs=nnx.Rngs(0))
+    jax_fng = JaxFusedRMSNormGated(
+        D, elementwise_affine=True, eps=1e-5, rngs=nnx.Rngs(0)
+    )
     jax_fng.weight.value = t2j(pt_fng.weight)
 
     g_np = np.random.RandomState(1).randn(2, 10, D).astype(np.float32)
@@ -1758,7 +1897,8 @@ def run_test_norm_bfloat16() -> bool:
         "FusedRMSNormGated bf16",
         pt_y_fng.float().detach().numpy(),
         np.array(jax_y_fng.astype(jnp.float32)),
-        atol=5e-3, rtol=5e-3,
+        atol=5e-3,
+        rtol=5e-3,
     )
 
     ok = ok_rms and ok_fng
@@ -1770,6 +1910,7 @@ def run_test_norm_bfloat16() -> bool:
 # =============================================================================
 # Test: Kernel varlen + output_final_state + no initial_state
 # =============================================================================
+
 
 def run_test_kernel_varlen_final_no_init() -> bool:
     """Varlen kernel with output_final_state=True but no initial_state.
@@ -1784,7 +1925,11 @@ def run_test_kernel_varlen_final_no_init() -> bool:
     print(f"{'=' * 55}")
 
     return run_test_kernel(
-        B=1, T=32, H=4, K=32, V=64,
+        B=1,
+        T=32,
+        H=4,
+        K=32,
+        V=64,
         cu_seqlens_list=[0, 12, 32],
         use_initial_state=False,
         output_final_state=True,
@@ -1794,6 +1939,7 @@ def run_test_kernel_varlen_final_no_init() -> bool:
 # =============================================================================
 # Test: Layer mode='fused_chunk' and mode='fused_recurrent'
 # =============================================================================
+
 
 def run_test_layer_mode_variants() -> bool:
     """Test layer with explicit mode='fused_chunk' and 'fused_recurrent'.
@@ -1813,11 +1959,15 @@ def run_test_layer_mode_variants() -> bool:
     x_np = np.random.RandomState(42).randn(B, T, hidden_size).astype(np.float32)
 
     results = {}
-    for mode in ['chunk', 'fused_recurrent', 'fused_chunk']:
+    for mode in ["chunk", "fused_recurrent", "fused_chunk"]:
         torch.manual_seed(42)
         model = TorchGLA(
-            mode=mode, hidden_size=hidden_size, num_heads=num_heads,
-            use_short_conv=False, use_output_gate=True, gate_fn='swish',
+            mode=mode,
+            hidden_size=hidden_size,
+            num_heads=num_heads,
+            use_short_conv=False,
+            use_output_gate=True,
+            gate_fn="swish",
             fuse_norm=True,
         )
         model.eval()
@@ -1826,8 +1976,8 @@ def run_test_layer_mode_variants() -> bool:
         results[mode] = t2n(out)
 
     ok = True
-    diff_fr = np.abs(results['chunk'] - results['fused_recurrent']).max()
-    diff_fc = np.abs(results['chunk'] - results['fused_chunk']).max()
+    diff_fr = np.abs(results["chunk"] - results["fused_recurrent"]).max()
+    diff_fc = np.abs(results["chunk"] - results["fused_chunk"]).max()
     print(f"  chunk vs fused_recurrent: {diff_fr:.2e}")
     print(f"  chunk vs fused_chunk:     {diff_fc:.2e}")
 
@@ -1849,6 +1999,7 @@ def run_test_layer_mode_variants() -> bool:
 # Main: run all tests
 # =============================================================================
 
+
 def main():
     print("=" * 70)
     print("check_gla_layer.py — PyTorch vs JAX cross-framework comparison")
@@ -1860,569 +2011,946 @@ def main():
     # =============================================
     # Category 1: Core kernel — basic configs
     # =============================================
-    test_cases.extend([
-        ("Kernel: basic small",
-         lambda: run_test_kernel(B=1, T=16, H=2, K=16, V=32)),
-        ("Kernel: B=2, T=32",
-         lambda: run_test_kernel(B=2, T=32, H=4, K=32, V=64)),
-        ("Kernel: B=4, T=64",
-         lambda: run_test_kernel(B=4, T=64, H=4, K=32, V=32)),
-    ])
+    test_cases.extend(
+        [
+            (
+                "Kernel: basic small",
+                lambda: run_test_kernel(B=1, T=16, H=2, K=16, V=32),
+            ),
+            ("Kernel: B=2, T=32", lambda: run_test_kernel(B=2, T=32, H=4, K=32, V=64)),
+            ("Kernel: B=4, T=64", lambda: run_test_kernel(B=4, T=64, H=4, K=32, V=32)),
+        ]
+    )
 
     # =============================================
     # Category 2: Core kernel — various K/V dims
     # =============================================
-    test_cases.extend([
-        ("Kernel: K=64, V=64",
-         lambda: run_test_kernel(B=2, T=32, H=4, K=64, V=64)),
-        ("Kernel: K=128, V=128",
-         lambda: run_test_kernel(B=1, T=32, H=2, K=128, V=128)),
-        ("Kernel: K=16, V=256",
-         lambda: run_test_kernel(B=1, T=16, H=2, K=16, V=256)),
-    ])
+    test_cases.extend(
+        [
+            ("Kernel: K=64, V=64", lambda: run_test_kernel(B=2, T=32, H=4, K=64, V=64)),
+            (
+                "Kernel: K=128, V=128",
+                lambda: run_test_kernel(B=1, T=32, H=2, K=128, V=128),
+            ),
+            (
+                "Kernel: K=16, V=256",
+                lambda: run_test_kernel(B=1, T=16, H=2, K=16, V=256),
+            ),
+        ]
+    )
 
     # =============================================
     # Category 3: Core kernel — long sequences
     # =============================================
-    test_cases.extend([
-        ("Kernel: T=128",
-         lambda: run_test_kernel(B=1, T=128, H=4, K=32, V=64)),
-        ("Kernel: T=256",
-         lambda: run_test_kernel(B=1, T=256, H=2, K=32, V=32)),
-        ("Kernel: T=512",
-         lambda: run_test_kernel(B=1, T=512, H=2, K=16, V=32)),
-    ])
+    test_cases.extend(
+        [
+            ("Kernel: T=128", lambda: run_test_kernel(B=1, T=128, H=4, K=32, V=64)),
+            ("Kernel: T=256", lambda: run_test_kernel(B=1, T=256, H=2, K=32, V=32)),
+            ("Kernel: T=512", lambda: run_test_kernel(B=1, T=512, H=2, K=16, V=32)),
+        ]
+    )
 
     # =============================================
     # Category 4: Core kernel — with initial_state
     # =============================================
-    test_cases.extend([
-        ("Kernel: init_state",
-         lambda: run_test_kernel(B=2, T=32, H=4, K=32, V=64, use_initial_state=True)),
-        ("Kernel: init+final state",
-         lambda: run_test_kernel(B=2, T=32, H=4, K=32, V=64,
-                                 use_initial_state=True, output_final_state=True)),
-    ])
+    test_cases.extend(
+        [
+            (
+                "Kernel: init_state",
+                lambda: run_test_kernel(
+                    B=2, T=32, H=4, K=32, V=64, use_initial_state=True
+                ),
+            ),
+            (
+                "Kernel: init+final state",
+                lambda: run_test_kernel(
+                    B=2,
+                    T=32,
+                    H=4,
+                    K=32,
+                    V=64,
+                    use_initial_state=True,
+                    output_final_state=True,
+                ),
+            ),
+        ]
+    )
 
     # =============================================
     # Category 5: Core kernel — cu_seqlens
     # =============================================
-    test_cases.extend([
-        ("Kernel: varlen 2 seqs",
-         lambda: run_test_kernel(B=1, T=32, H=4, K=32, V=64,
-                                 cu_seqlens_list=[0, 16, 32])),
-        ("Kernel: varlen 3 seqs",
-         lambda: run_test_kernel(B=1, T=48, H=4, K=32, V=64,
-                                 cu_seqlens_list=[0, 10, 30, 48])),
-        ("Kernel: varlen + init_state",
-         lambda: run_test_kernel(B=1, T=48, H=4, K=32, V=64,
-                                 cu_seqlens_list=[0, 16, 32, 48],
-                                 use_initial_state=True, output_final_state=True)),
-    ])
+    test_cases.extend(
+        [
+            (
+                "Kernel: varlen 2 seqs",
+                lambda: run_test_kernel(
+                    B=1, T=32, H=4, K=32, V=64, cu_seqlens_list=[0, 16, 32]
+                ),
+            ),
+            (
+                "Kernel: varlen 3 seqs",
+                lambda: run_test_kernel(
+                    B=1, T=48, H=4, K=32, V=64, cu_seqlens_list=[0, 10, 30, 48]
+                ),
+            ),
+            (
+                "Kernel: varlen + init_state",
+                lambda: run_test_kernel(
+                    B=1,
+                    T=48,
+                    H=4,
+                    K=32,
+                    V=64,
+                    cu_seqlens_list=[0, 16, 32, 48],
+                    use_initial_state=True,
+                    output_final_state=True,
+                ),
+            ),
+        ]
+    )
 
     # =============================================
     # Category 6: Varlen equivalence (JAX side)
     # =============================================
-    test_cases.extend([
-        ("Varlen equiv: T=32",
-         lambda: run_test_varlen_equiv(T=32, H=4, K=32, V=64)),
-        ("Varlen equiv: T=128",
-         lambda: run_test_varlen_equiv(T=128, H=2, K=64, V=64)),
-    ])
+    test_cases.extend(
+        [
+            (
+                "Varlen equiv: T=32",
+                lambda: run_test_varlen_equiv(T=32, H=4, K=32, V=64),
+            ),
+            (
+                "Varlen equiv: T=128",
+                lambda: run_test_varlen_equiv(T=128, H=2, K=64, V=64),
+            ),
+        ]
+    )
 
     # =============================================
     # Category 7: State split consistency
     # =============================================
-    test_cases.extend([
-        ("State split: B=2, T=64",
-         lambda: run_test_state_split(B=2, T=64, H=4, K=32, V=64)),
-    ])
+    test_cases.extend(
+        [
+            (
+                "State split: B=2, T=64",
+                lambda: run_test_state_split(B=2, T=64, H=4, K=32, V=64),
+            ),
+        ]
+    )
 
     # =============================================
     # Category 8: Module-level cross-framework
     # =============================================
-    test_cases.extend([
-        ("RMSNorm cross-framework", run_test_rmsnorm),
-        ("FusedRMSNormGated cross-framework", run_test_fused_norm_gated),
-    ])
+    test_cases.extend(
+        [
+            ("RMSNorm cross-framework", run_test_rmsnorm),
+            ("FusedRMSNormGated cross-framework", run_test_fused_norm_gated),
+        ]
+    )
 
     # =============================================
     # Category 9: Full layer — basic
     # =============================================
-    test_cases.extend([
-        ("Layer: basic (no conv, fuse_norm)",
-         lambda: run_test_layer(B=2, T=32, hidden_size=128, num_heads=4)),
-        ("Layer: basic (no conv, no fuse)",
-         lambda: run_test_layer(B=2, T=32, hidden_size=128, num_heads=4, fuse_norm=False)),
-        ("Layer: T=64",
-         lambda: run_test_layer(B=1, T=64, hidden_size=128, num_heads=4)),
-    ])
+    test_cases.extend(
+        [
+            (
+                "Layer: basic (no conv, fuse_norm)",
+                lambda: run_test_layer(B=2, T=32, hidden_size=128, num_heads=4),
+            ),
+            (
+                "Layer: basic (no conv, no fuse)",
+                lambda: run_test_layer(
+                    B=2, T=32, hidden_size=128, num_heads=4, fuse_norm=False
+                ),
+            ),
+            (
+                "Layer: T=64",
+                lambda: run_test_layer(B=1, T=64, hidden_size=128, num_heads=4),
+            ),
+        ]
+    )
 
     # =============================================
     # Category 10: Full layer — with short conv
     # =============================================
-    test_cases.extend([
-        ("Layer: with conv",
-         lambda: run_test_layer(B=2, T=32, hidden_size=128, num_heads=4,
-                                use_short_conv=True, conv_size=4)),
-        ("Layer: conv + T=64",
-         lambda: run_test_layer(B=1, T=64, hidden_size=128, num_heads=4,
-                                use_short_conv=True)),
-    ])
+    test_cases.extend(
+        [
+            (
+                "Layer: with conv",
+                lambda: run_test_layer(
+                    B=2,
+                    T=32,
+                    hidden_size=128,
+                    num_heads=4,
+                    use_short_conv=True,
+                    conv_size=4,
+                ),
+            ),
+            (
+                "Layer: conv + T=64",
+                lambda: run_test_layer(
+                    B=1, T=64, hidden_size=128, num_heads=4, use_short_conv=True
+                ),
+            ),
+        ]
+    )
 
     # =============================================
     # Category 11: Full layer — MQA
     # =============================================
-    test_cases.extend([
-        ("Layer: MQA (kv_heads=2)",
-         lambda: run_test_layer(B=2, T=32, hidden_size=128, num_heads=4,
-                                num_kv_heads=2)),
-        ("Layer: MQA + conv",
-         lambda: run_test_layer(B=2, T=32, hidden_size=128, num_heads=4,
-                                num_kv_heads=2, use_short_conv=True)),
-    ])
+    test_cases.extend(
+        [
+            (
+                "Layer: MQA (kv_heads=2)",
+                lambda: run_test_layer(
+                    B=2, T=32, hidden_size=128, num_heads=4, num_kv_heads=2
+                ),
+            ),
+            (
+                "Layer: MQA + conv",
+                lambda: run_test_layer(
+                    B=2,
+                    T=32,
+                    hidden_size=128,
+                    num_heads=4,
+                    num_kv_heads=2,
+                    use_short_conv=True,
+                ),
+            ),
+        ]
+    )
 
     # =============================================
     # Category 12: Full layer — expand ratios
     # =============================================
-    test_cases.extend([
-        ("Layer: expand_k=1.0",
-         lambda: run_test_layer(B=2, T=32, hidden_size=128, num_heads=4,
-                                expand_k=1.0)),
-        ("Layer: expand_v=2.0",
-         lambda: run_test_layer(B=2, T=32, hidden_size=128, num_heads=4,
-                                expand_v=2.0)),
-    ])
+    test_cases.extend(
+        [
+            (
+                "Layer: expand_k=1.0",
+                lambda: run_test_layer(
+                    B=2, T=32, hidden_size=128, num_heads=4, expand_k=1.0
+                ),
+            ),
+            (
+                "Layer: expand_v=2.0",
+                lambda: run_test_layer(
+                    B=2, T=32, hidden_size=128, num_heads=4, expand_v=2.0
+                ),
+            ),
+        ]
+    )
 
     # =============================================
     # Category 13: Full layer — no output gate
     # =============================================
-    test_cases.extend([
-        ("Layer: no output gate",
-         lambda: run_test_layer(B=2, T=32, hidden_size=128, num_heads=4,
-                                use_output_gate=False, fuse_norm=False)),
-    ])
+    test_cases.extend(
+        [
+            (
+                "Layer: no output gate",
+                lambda: run_test_layer(
+                    B=2,
+                    T=32,
+                    hidden_size=128,
+                    num_heads=4,
+                    use_output_gate=False,
+                    fuse_norm=False,
+                ),
+            ),
+        ]
+    )
 
     # =============================================
     # Category 14: Full layer — gate options
     # =============================================
-    test_cases.extend([
-        ("Layer: clamp_min=-0.5",
-         lambda: run_test_layer(B=2, T=32, hidden_size=128, num_heads=4,
-                                clamp_min=-0.5)),
-        ("Layer: normalizer=8",
-         lambda: run_test_layer(B=2, T=32, hidden_size=128, num_heads=4,
-                                gate_logit_normalizer=8)),
-    ])
+    test_cases.extend(
+        [
+            (
+                "Layer: clamp_min=-0.5",
+                lambda: run_test_layer(
+                    B=2, T=32, hidden_size=128, num_heads=4, clamp_min=-0.5
+                ),
+            ),
+            (
+                "Layer: normalizer=8",
+                lambda: run_test_layer(
+                    B=2, T=32, hidden_size=128, num_heads=4, gate_logit_normalizer=8
+                ),
+            ),
+        ]
+    )
 
     # =============================================
     # Category 15: Full layer — edge cases
     # =============================================
-    test_cases.extend([
-        ("Layer: B=1, T=1",
-         lambda: run_test_layer(B=1, T=1, hidden_size=64, num_heads=2)),
-        ("Layer: B=1, T=4",
-         lambda: run_test_layer(B=1, T=4, hidden_size=64, num_heads=2)),
-    ])
+    test_cases.extend(
+        [
+            (
+                "Layer: B=1, T=1",
+                lambda: run_test_layer(B=1, T=1, hidden_size=64, num_heads=2),
+            ),
+            (
+                "Layer: B=1, T=4",
+                lambda: run_test_layer(B=1, T=4, hidden_size=64, num_heads=2),
+            ),
+        ]
+    )
 
     # =============================================
     # Category 16: Norm — elementwise_affine=False
     # =============================================
-    test_cases.extend([
-        ("RMSNorm no-affine", run_test_rmsnorm_no_affine),
-        ("FusedRMSNormGated no-affine", run_test_fused_norm_gated_no_affine),
-    ])
+    test_cases.extend(
+        [
+            ("RMSNorm no-affine", run_test_rmsnorm_no_affine),
+            ("FusedRMSNormGated no-affine", run_test_fused_norm_gated_no_affine),
+        ]
+    )
 
     # =============================================
     # Category 17: ShortConv — cross-framework
     # =============================================
-    test_cases.extend([
-        ("ShortConv XF: basic silu",
-         lambda: run_test_short_conv_xf(D=64, K_size=4, T=16)),
-        ("ShortConv XF: no activation",
-         lambda: run_test_short_conv_xf(
-             D=32, K_size=4, T=16, activation=None)),
-        ("ShortConv XF: with bias",
-         lambda: run_test_short_conv_xf(
-             D=32, K_size=4, T=16, bias=True)),
-        ("ShortConv XF: bias + no act",
-         lambda: run_test_short_conv_xf(
-             D=32, K_size=3, T=8, activation=None, bias=True)),
-        ("ShortConv XF: varlen",
-         run_test_short_conv_varlen_xf),
-    ])
+    test_cases.extend(
+        [
+            (
+                "ShortConv XF: basic silu",
+                lambda: run_test_short_conv_xf(D=64, K_size=4, T=16),
+            ),
+            (
+                "ShortConv XF: no activation",
+                lambda: run_test_short_conv_xf(D=32, K_size=4, T=16, activation=None),
+            ),
+            (
+                "ShortConv XF: with bias",
+                lambda: run_test_short_conv_xf(D=32, K_size=4, T=16, bias=True),
+            ),
+            (
+                "ShortConv XF: bias + no act",
+                lambda: run_test_short_conv_xf(
+                    D=32, K_size=3, T=8, activation=None, bias=True
+                ),
+            ),
+            ("ShortConv XF: varlen", run_test_short_conv_varlen_xf),
+        ]
+    )
 
     # =============================================
     # Category 18: ShortConv — JAX consistency
     # =============================================
-    test_cases.extend([
-        ("ShortConv: cache prefix", run_test_short_conv_cache),
-        ("ShortConv: short seq final_state", run_test_short_conv_short_seq),
-        ("ShortConv: step vs full", run_test_short_conv_step),
-    ])
+    test_cases.extend(
+        [
+            ("ShortConv: cache prefix", run_test_short_conv_cache),
+            ("ShortConv: short seq final_state", run_test_short_conv_short_seq),
+            ("ShortConv: step vs full", run_test_short_conv_step),
+        ]
+    )
 
     # =============================================
     # Category 19: Kernel — custom scale & final_state
     # =============================================
-    test_cases.extend([
-        ("Kernel: custom scale=0.1",
-         lambda: run_test_kernel(B=2, T=32, H=4, K=32, V=64, scale=0.1)),
-        ("Kernel: final_state only",
-         lambda: run_test_kernel(B=2, T=32, H=4, K=32, V=64,
-                                 output_final_state=True)),
-    ])
+    test_cases.extend(
+        [
+            (
+                "Kernel: custom scale=0.1",
+                lambda: run_test_kernel(B=2, T=32, H=4, K=32, V=64, scale=0.1),
+            ),
+            (
+                "Kernel: final_state only",
+                lambda: run_test_kernel(
+                    B=2, T=32, H=4, K=32, V=64, output_final_state=True
+                ),
+            ),
+        ]
+    )
 
     # =============================================
     # Category 20: Layer — feature_map
     # =============================================
-    test_cases.extend([
-        ("Layer: feature_map=relu",
-         lambda: run_test_layer(B=2, T=32, hidden_size=128, num_heads=4,
-                                feature_map='relu')),
-    ])
+    test_cases.extend(
+        [
+            (
+                "Layer: feature_map=relu",
+                lambda: run_test_layer(
+                    B=2, T=32, hidden_size=128, num_heads=4, feature_map="relu"
+                ),
+            ),
+        ]
+    )
 
     # =============================================
     # Category 21: Layer — gate_fn variants
     # =============================================
-    test_cases.extend([
-        ("Layer: gate_fn=sigmoid",
-         lambda: run_test_layer(B=2, T=32, hidden_size=128, num_heads=4,
-                                gate_fn='sigmoid', fuse_norm=False)),
-        ("Layer: gate_fn=relu",
-         lambda: run_test_layer(B=2, T=32, hidden_size=128, num_heads=4,
-                                gate_fn='relu', fuse_norm=False)),
-    ])
+    test_cases.extend(
+        [
+            (
+                "Layer: gate_fn=sigmoid",
+                lambda: run_test_layer(
+                    B=2,
+                    T=32,
+                    hidden_size=128,
+                    num_heads=4,
+                    gate_fn="sigmoid",
+                    fuse_norm=False,
+                ),
+            ),
+            (
+                "Layer: gate_fn=relu",
+                lambda: run_test_layer(
+                    B=2,
+                    T=32,
+                    hidden_size=128,
+                    num_heads=4,
+                    gate_fn="relu",
+                    fuse_norm=False,
+                ),
+            ),
+        ]
+    )
 
     # =============================================
     # Category 22: Layer — T > 64 (mode switch)
     # =============================================
-    test_cases.extend([
-        ("Layer: T=128 (chunk mode)",
-         lambda: run_test_layer(B=1, T=128, hidden_size=128, num_heads=4)),
-        ("Layer: T=96 + conv",
-         lambda: run_test_layer(B=1, T=96, hidden_size=128, num_heads=4,
-                                use_short_conv=True)),
-    ])
+    test_cases.extend(
+        [
+            (
+                "Layer: T=128 (chunk mode)",
+                lambda: run_test_layer(B=1, T=128, hidden_size=128, num_heads=4),
+            ),
+            (
+                "Layer: T=96 + conv",
+                lambda: run_test_layer(
+                    B=1, T=96, hidden_size=128, num_heads=4, use_short_conv=True
+                ),
+            ),
+        ]
+    )
 
     # =============================================
     # Category 23: Layer — cu_seqlens
     # =============================================
-    test_cases.extend([
-        ("Layer: cu_seqlens (no conv)",
-         lambda: run_test_layer_cu_seqlens(use_short_conv=False)),
-        ("Layer: cu_seqlens + conv",
-         lambda: run_test_layer_cu_seqlens(use_short_conv=True)),
-    ])
+    test_cases.extend(
+        [
+            (
+                "Layer: cu_seqlens (no conv)",
+                lambda: run_test_layer_cu_seqlens(use_short_conv=False),
+            ),
+            (
+                "Layer: cu_seqlens + conv",
+                lambda: run_test_layer_cu_seqlens(use_short_conv=True),
+            ),
+        ]
+    )
 
     # =============================================
     # Category 24: ShortConv step cross-framework
     # =============================================
-    test_cases.extend([
-        ("ShortConv: step XF", run_test_short_conv_step_xf),
-    ])
+    test_cases.extend(
+        [
+            ("ShortConv: step XF", run_test_short_conv_step_xf),
+        ]
+    )
 
     # =============================================
     # Category 25: Varlen conv short-segment cache
     # =============================================
-    test_cases.extend([
-        ("ShortConv: varlen short seg cache", run_test_short_conv_varlen_short_seg),
-    ])
+    test_cases.extend(
+        [
+            ("ShortConv: varlen short seg cache", run_test_short_conv_varlen_short_seg),
+        ]
+    )
 
     # =============================================
     # Category 26: Kernel edge — H=1, seg_len=1
     # =============================================
-    test_cases.extend([
-        ("Kernel: H=1 single head",
-         lambda: run_test_kernel(B=2, T=16, H=1, K=32, V=64)),
-        ("Kernel: varlen seg_len=1",
-         lambda: run_test_kernel(B=1, T=5, H=2, K=16, V=32,
-                                 cu_seqlens_list=[0, 1, 3, 5],
-                                 use_initial_state=True, output_final_state=True)),
-    ])
+    test_cases.extend(
+        [
+            (
+                "Kernel: H=1 single head",
+                lambda: run_test_kernel(B=2, T=16, H=1, K=32, V=64),
+            ),
+            (
+                "Kernel: varlen seg_len=1",
+                lambda: run_test_kernel(
+                    B=1,
+                    T=5,
+                    H=2,
+                    K=16,
+                    V=32,
+                    cu_seqlens_list=[0, 1, 3, 5],
+                    use_initial_state=True,
+                    output_final_state=True,
+                ),
+            ),
+        ]
+    )
 
     # =============================================
     # Category 27: Layer — conv_bias, affine, low_rank
     # =============================================
-    test_cases.extend([
-        ("Layer: conv_bias=True",
-         lambda: run_test_layer(B=2, T=32, hidden_size=128, num_heads=4,
-                                use_short_conv=True, conv_size=4,
-                                conv_bias=True)),
-        ("Layer: norm no-affine",
-         lambda: run_test_layer(B=2, T=32, hidden_size=128, num_heads=4,
-                                elementwise_affine=False)),
-        ("Layer: gate_low_rank_dim=8",
-         lambda: run_test_layer(B=2, T=32, hidden_size=128, num_heads=4,
-                                gate_low_rank_dim=8)),
-    ])
+    test_cases.extend(
+        [
+            (
+                "Layer: conv_bias=True",
+                lambda: run_test_layer(
+                    B=2,
+                    T=32,
+                    hidden_size=128,
+                    num_heads=4,
+                    use_short_conv=True,
+                    conv_size=4,
+                    conv_bias=True,
+                ),
+            ),
+            (
+                "Layer: norm no-affine",
+                lambda: run_test_layer(
+                    B=2, T=32, hidden_size=128, num_heads=4, elementwise_affine=False
+                ),
+            ),
+            (
+                "Layer: gate_low_rank_dim=8",
+                lambda: run_test_layer(
+                    B=2, T=32, hidden_size=128, num_heads=4, gate_low_rank_dim=8
+                ),
+            ),
+        ]
+    )
 
     # =============================================
     # Category 28: ShortConv final_state XF + swish alias
     # =============================================
-    test_cases.extend([
-        ("ShortConv: final_state XF", run_test_short_conv_final_state_xf),
-        ("ShortConv: swish alias", run_test_short_conv_swish_alias),
-    ])
+    test_cases.extend(
+        [
+            ("ShortConv: final_state XF", run_test_short_conv_final_state_xf),
+            ("ShortConv: swish alias", run_test_short_conv_swish_alias),
+        ]
+    )
 
     # =============================================
     # Category 29: PyTorch attention_mask pipeline
     # =============================================
-    test_cases.extend([
-        ("PT: attention_mask pipeline", run_test_attention_mask_pipeline),
-    ])
+    test_cases.extend(
+        [
+            ("PT: attention_mask pipeline", run_test_attention_mask_pipeline),
+        ]
+    )
 
     # =============================================
     # Category 30: PyTorch ShortConv auto-step
     # =============================================
-    test_cases.extend([
-        ("PT: ShortConv auto-step", run_test_pt_short_conv_auto_step),
-    ])
+    test_cases.extend(
+        [
+            ("PT: ShortConv auto-step", run_test_pt_short_conv_auto_step),
+        ]
+    )
 
     # =============================================
     # Category 31: ACT2FN completeness (gelu, tanh)
     # =============================================
-    test_cases.extend([
-        ("Layer: gate_fn=gelu",
-         lambda: run_test_layer(B=2, T=32, hidden_size=128, num_heads=4,
-                                gate_fn='gelu', fuse_norm=False)),
-        ("Layer: gate_fn=tanh",
-         lambda: run_test_layer(B=2, T=32, hidden_size=128, num_heads=4,
-                                gate_fn='tanh', fuse_norm=False)),
-    ])
+    test_cases.extend(
+        [
+            (
+                "Layer: gate_fn=gelu",
+                lambda: run_test_layer(
+                    B=2,
+                    T=32,
+                    hidden_size=128,
+                    num_heads=4,
+                    gate_fn="gelu",
+                    fuse_norm=False,
+                ),
+            ),
+            (
+                "Layer: gate_fn=tanh",
+                lambda: run_test_layer(
+                    B=2,
+                    T=32,
+                    hidden_size=128,
+                    num_heads=4,
+                    gate_fn="tanh",
+                    fuse_norm=False,
+                ),
+            ),
+        ]
+    )
 
     # =============================================
     # Category 32: feature_map variants
     # =============================================
-    test_cases.extend([
-        ("Layer: feature_map=tanh",
-         lambda: run_test_layer(B=2, T=32, hidden_size=128, num_heads=4,
-                                feature_map='tanh')),
-        ("Layer: feature_map=gelu",
-         lambda: run_test_layer(B=2, T=32, hidden_size=128, num_heads=4,
-                                feature_map='gelu')),
-    ])
+    test_cases.extend(
+        [
+            (
+                "Layer: feature_map=tanh",
+                lambda: run_test_layer(
+                    B=2, T=32, hidden_size=128, num_heads=4, feature_map="tanh"
+                ),
+            ),
+            (
+                "Layer: feature_map=gelu",
+                lambda: run_test_layer(
+                    B=2, T=32, hidden_size=128, num_heads=4, feature_map="gelu"
+                ),
+            ),
+        ]
+    )
 
     # =============================================
     # Category 33: Layer no-gate + fuse_norm=True
     # =============================================
-    test_cases.extend([
-        ("Layer: no gate + fuse_norm=True",
-         lambda: run_test_layer(B=2, T=32, hidden_size=128, num_heads=4,
-                                use_output_gate=False, fuse_norm=True)),
-    ])
+    test_cases.extend(
+        [
+            (
+                "Layer: no gate + fuse_norm=True",
+                lambda: run_test_layer(
+                    B=2,
+                    T=32,
+                    hidden_size=128,
+                    num_heads=4,
+                    use_output_gate=False,
+                    fuse_norm=True,
+                ),
+            ),
+        ]
+    )
 
     # =============================================
     # Category 34: ShortConv step edge cases
     # =============================================
-    test_cases.extend([
-        ("ShortConv: step no-cache no-output",
-         run_test_short_conv_step_no_cache_no_output),
-        ("ShortConv: step discard cache",
-         run_test_short_conv_step_discard_cache),
-        ("PT: step no-cache else branch",
-         run_test_pt_short_conv_step_no_cache),
-    ])
+    test_cases.extend(
+        [
+            (
+                "ShortConv: step no-cache no-output",
+                run_test_short_conv_step_no_cache_no_output,
+            ),
+            ("ShortConv: step discard cache", run_test_short_conv_step_discard_cache),
+            ("PT: step no-cache else branch", run_test_pt_short_conv_step_no_cache),
+        ]
+    )
 
     # =============================================
     # Category 35: ShortConv step with bias (XF)
     # =============================================
-    test_cases.extend([
-        ("ShortConv: step+bias XF",
-         run_test_short_conv_step_bias_xf),
-    ])
+    test_cases.extend(
+        [
+            ("ShortConv: step+bias XF", run_test_short_conv_step_bias_xf),
+        ]
+    )
 
     # =============================================
     # Category 36: PT ShortConv step cu_seqlens
     # =============================================
-    test_cases.extend([
-        ("PT: step cu_seqlens",
-         run_test_pt_short_conv_step_cu_seqlens),
-    ])
+    test_cases.extend(
+        [
+            ("PT: step cu_seqlens", run_test_pt_short_conv_step_cu_seqlens),
+        ]
+    )
 
     # =============================================
     # Category 37: PT ShortConv final_state edge
     # =============================================
-    test_cases.extend([
-        ("PT: short-seq final_state",
-         run_test_pt_short_conv_short_seq_final_state),
-        ("ShortConv: varlen final_state XF",
-         run_test_short_conv_varlen_final_state_xf),
-        ("PT: cache.copy_ branch",
-         run_test_pt_short_conv_cache_copy),
-    ])
+    test_cases.extend(
+        [
+            ("PT: short-seq final_state", run_test_pt_short_conv_short_seq_final_state),
+            (
+                "ShortConv: varlen final_state XF",
+                run_test_short_conv_varlen_final_state_xf,
+            ),
+            ("PT: cache.copy_ branch", run_test_pt_short_conv_cache_copy),
+        ]
+    )
 
     # =============================================
     # Category 38: Layer mode variants
     # =============================================
-    test_cases.extend([
-        ("PT: mode variants",
-         run_test_layer_mode_variants),
-    ])
+    test_cases.extend(
+        [
+            ("PT: mode variants", run_test_layer_mode_variants),
+        ]
+    )
 
     # =============================================
     # Category 39: chunk_gla vs naive — basic
     # =============================================
-    test_cases.extend([
-        ("chunk_gla vs naive: basic",
-         lambda: run_test_chunk_vs_naive(B=2, T=64, H=4, K=32, V=64)),
-        ("chunk_gla vs naive: C=8",
-         lambda: run_test_chunk_vs_naive(B=2, T=64, H=4, K=32, V=64, chunk_size=8)),
-        ("chunk_gla vs naive: C=32",
-         lambda: run_test_chunk_vs_naive(B=2, T=64, H=4, K=32, V=64, chunk_size=32)),
-        ("chunk_gla vs naive: C=64 (1 chunk)",
-         lambda: run_test_chunk_vs_naive(B=2, T=64, H=4, K=32, V=64, chunk_size=64)),
-    ])
+    test_cases.extend(
+        [
+            (
+                "chunk_gla vs naive: basic",
+                lambda: run_test_chunk_vs_naive(B=2, T=64, H=4, K=32, V=64),
+            ),
+            (
+                "chunk_gla vs naive: C=8",
+                lambda: run_test_chunk_vs_naive(
+                    B=2, T=64, H=4, K=32, V=64, chunk_size=8
+                ),
+            ),
+            (
+                "chunk_gla vs naive: C=32",
+                lambda: run_test_chunk_vs_naive(
+                    B=2, T=64, H=4, K=32, V=64, chunk_size=32
+                ),
+            ),
+            (
+                "chunk_gla vs naive: C=64 (1 chunk)",
+                lambda: run_test_chunk_vs_naive(
+                    B=2, T=64, H=4, K=32, V=64, chunk_size=64
+                ),
+            ),
+        ]
+    )
 
     # =============================================
     # Category 40: chunk_gla — non-aligned T
     # =============================================
-    test_cases.extend([
-        ("chunk_gla vs naive: T=50 (unaligned)",
-         lambda: run_test_chunk_vs_naive(B=2, T=50, H=4, K=32, V=64, chunk_size=16)),
-        ("chunk_gla vs naive: T=17 C=8",
-         lambda: run_test_chunk_vs_naive(B=1, T=17, H=2, K=16, V=32, chunk_size=8)),
-        ("chunk_gla vs naive: T=1 (single token)",
-         lambda: run_test_chunk_vs_naive(B=2, T=1, H=4, K=32, V=64, chunk_size=16)),
-    ])
+    test_cases.extend(
+        [
+            (
+                "chunk_gla vs naive: T=50 (unaligned)",
+                lambda: run_test_chunk_vs_naive(
+                    B=2, T=50, H=4, K=32, V=64, chunk_size=16
+                ),
+            ),
+            (
+                "chunk_gla vs naive: T=17 C=8",
+                lambda: run_test_chunk_vs_naive(
+                    B=1, T=17, H=2, K=16, V=32, chunk_size=8
+                ),
+            ),
+            (
+                "chunk_gla vs naive: T=1 (single token)",
+                lambda: run_test_chunk_vs_naive(
+                    B=2, T=1, H=4, K=32, V=64, chunk_size=16
+                ),
+            ),
+        ]
+    )
 
     # =============================================
     # Category 41: chunk_gla — state management
     # =============================================
-    test_cases.extend([
-        ("chunk_gla vs naive: init+final state",
-         lambda: run_test_chunk_vs_naive(
-             B=2, T=64, H=4, K=32, V=64,
-             use_initial_state=True, output_final_state=True)),
-        ("chunk_gla vs naive: init only",
-         lambda: run_test_chunk_vs_naive(
-             B=2, T=32, H=4, K=32, V=64, use_initial_state=True)),
-        ("chunk_gla vs naive: final only",
-         lambda: run_test_chunk_vs_naive(
-             B=2, T=32, H=4, K=32, V=64, output_final_state=True)),
-    ])
+    test_cases.extend(
+        [
+            (
+                "chunk_gla vs naive: init+final state",
+                lambda: run_test_chunk_vs_naive(
+                    B=2,
+                    T=64,
+                    H=4,
+                    K=32,
+                    V=64,
+                    use_initial_state=True,
+                    output_final_state=True,
+                ),
+            ),
+            (
+                "chunk_gla vs naive: init only",
+                lambda: run_test_chunk_vs_naive(
+                    B=2, T=32, H=4, K=32, V=64, use_initial_state=True
+                ),
+            ),
+            (
+                "chunk_gla vs naive: final only",
+                lambda: run_test_chunk_vs_naive(
+                    B=2, T=32, H=4, K=32, V=64, output_final_state=True
+                ),
+            ),
+        ]
+    )
 
     # =============================================
     # Category 42: chunk_gla — varlen (cu_seqlens)
     # =============================================
-    test_cases.extend([
-        ("chunk_gla vs naive: varlen 2 seg",
-         lambda: run_test_chunk_vs_naive(
-             B=1, T=32, H=4, K=32, V=64,
-             cu_seqlens_list=[0, 16, 32])),
-        ("chunk_gla vs naive: varlen 3 seg",
-         lambda: run_test_chunk_vs_naive(
-             B=1, T=48, H=4, K=32, V=64,
-             cu_seqlens_list=[0, 10, 30, 48])),
-        ("chunk_gla vs naive: varlen + init+final",
-         lambda: run_test_chunk_vs_naive(
-             B=1, T=48, H=4, K=32, V=64,
-             cu_seqlens_list=[0, 16, 32, 48],
-             use_initial_state=True, output_final_state=True)),
-    ])
+    test_cases.extend(
+        [
+            (
+                "chunk_gla vs naive: varlen 2 seg",
+                lambda: run_test_chunk_vs_naive(
+                    B=1, T=32, H=4, K=32, V=64, cu_seqlens_list=[0, 16, 32]
+                ),
+            ),
+            (
+                "chunk_gla vs naive: varlen 3 seg",
+                lambda: run_test_chunk_vs_naive(
+                    B=1, T=48, H=4, K=32, V=64, cu_seqlens_list=[0, 10, 30, 48]
+                ),
+            ),
+            (
+                "chunk_gla vs naive: varlen + init+final",
+                lambda: run_test_chunk_vs_naive(
+                    B=1,
+                    T=48,
+                    H=4,
+                    K=32,
+                    V=64,
+                    cu_seqlens_list=[0, 16, 32, 48],
+                    use_initial_state=True,
+                    output_final_state=True,
+                ),
+            ),
+        ]
+    )
 
     # =============================================
     # Category 43: chunk_gla — larger dims
     # =============================================
-    test_cases.extend([
-        ("chunk_gla vs naive: K=64 V=128",
-         lambda: run_test_chunk_vs_naive(B=1, T=64, H=2, K=64, V=128)),
-        ("chunk_gla vs naive: T=128 C=16",
-         lambda: run_test_chunk_vs_naive(B=1, T=128, H=4, K=32, V=64, chunk_size=16)),
-    ])
+    test_cases.extend(
+        [
+            (
+                "chunk_gla vs naive: K=64 V=128",
+                lambda: run_test_chunk_vs_naive(B=1, T=64, H=2, K=64, V=128),
+            ),
+            (
+                "chunk_gla vs naive: T=128 C=16",
+                lambda: run_test_chunk_vs_naive(
+                    B=1, T=128, H=4, K=32, V=64, chunk_size=16
+                ),
+            ),
+        ]
+    )
 
     # =============================================
     # Category 44: fused_chunk_gla vs naive
     # =============================================
-    test_cases.extend([
-        ("fused_chunk vs naive: basic",
-         lambda: run_test_fused_chunk_vs_naive(B=2, T=64, H=4, K=32, V=64)),
-        ("fused_chunk vs naive: init+final",
-         lambda: run_test_fused_chunk_vs_naive(
-             B=2, T=64, H=4, K=32, V=64,
-             use_initial_state=True, output_final_state=True)),
-        ("fused_chunk vs naive: varlen",
-         lambda: run_test_fused_chunk_vs_naive(
-             B=1, T=32, H=4, K=32, V=64,
-             cu_seqlens_list=[0, 12, 32])),
-    ])
+    test_cases.extend(
+        [
+            (
+                "fused_chunk vs naive: basic",
+                lambda: run_test_fused_chunk_vs_naive(B=2, T=64, H=4, K=32, V=64),
+            ),
+            (
+                "fused_chunk vs naive: init+final",
+                lambda: run_test_fused_chunk_vs_naive(
+                    B=2,
+                    T=64,
+                    H=4,
+                    K=32,
+                    V=64,
+                    use_initial_state=True,
+                    output_final_state=True,
+                ),
+            ),
+            (
+                "fused_chunk vs naive: varlen",
+                lambda: run_test_fused_chunk_vs_naive(
+                    B=1, T=32, H=4, K=32, V=64, cu_seqlens_list=[0, 12, 32]
+                ),
+            ),
+        ]
+    )
 
     # =============================================
     # Category 45: Layer mode chunk/fused_chunk integration
     # =============================================
-    test_cases.extend([
-        ("Layer: chunk vs fused_recurrent mode",
-         run_test_chunk_layer_mode),
-    ])
+    test_cases.extend(
+        [
+            ("Layer: chunk vs fused_recurrent mode", run_test_chunk_layer_mode),
+        ]
+    )
 
     # =============================================
     # Category 46: Norm bfloat16 dtype preservation
     # =============================================
-    test_cases.extend([
-        ("Norm: bfloat16 dtype XF",
-         run_test_norm_bfloat16),
-    ])
+    test_cases.extend(
+        [
+            ("Norm: bfloat16 dtype XF", run_test_norm_bfloat16),
+        ]
+    )
 
     # =============================================
     # Category 47: Kernel varlen final_state w/o init
     # =============================================
-    test_cases.extend([
-        ("Kernel: varlen final no init",
-         run_test_kernel_varlen_final_no_init),
-    ])
+    test_cases.extend(
+        [
+            ("Kernel: varlen final no init", run_test_kernel_varlen_final_no_init),
+        ]
+    )
 
     # =============================================
     # Category 48: feature_map='sigmoid'
     # =============================================
-    test_cases.extend([
-        ("Layer: feature_map=sigmoid",
-         lambda: run_test_layer(B=2, T=32, hidden_size=128, num_heads=4,
-                                feature_map='sigmoid')),
-    ])
+    test_cases.extend(
+        [
+            (
+                "Layer: feature_map=sigmoid",
+                lambda: run_test_layer(
+                    B=2, T=32, hidden_size=128, num_heads=4, feature_map="sigmoid"
+                ),
+            ),
+        ]
+    )
 
     # =============================================
     # Category 49: MQA + cu_seqlens
     # =============================================
-    test_cases.extend([
-        ("Layer: MQA + cu_seqlens",
-         lambda: run_test_layer_cu_seqlens(
-             use_short_conv=False, num_kv_heads=2)),
-    ])
+    test_cases.extend(
+        [
+            (
+                "Layer: MQA + cu_seqlens",
+                lambda: run_test_layer_cu_seqlens(use_short_conv=False, num_kv_heads=2),
+            ),
+        ]
+    )
 
     # =============================================
     # Category 50: expand_k + expand_v both non-default
     # =============================================
-    test_cases.extend([
-        ("Layer: expand_k=1.0 + expand_v=2.0",
-         lambda: run_test_layer(B=2, T=32, hidden_size=128, num_heads=4,
-                                expand_k=1.0, expand_v=2.0)),
-    ])
+    test_cases.extend(
+        [
+            (
+                "Layer: expand_k=1.0 + expand_v=2.0",
+                lambda: run_test_layer(
+                    B=2, T=32, hidden_size=128, num_heads=4, expand_k=1.0, expand_v=2.0
+                ),
+            ),
+        ]
+    )
 
     # =============================================
     # Category 51: conv + feature_map combo
     # =============================================
-    test_cases.extend([
-        ("Layer: conv + feature_map=relu",
-         lambda: run_test_layer(B=2, T=32, hidden_size=128, num_heads=4,
-                                use_short_conv=True, feature_map='relu')),
-    ])
+    test_cases.extend(
+        [
+            (
+                "Layer: conv + feature_map=relu",
+                lambda: run_test_layer(
+                    B=2,
+                    T=32,
+                    hidden_size=128,
+                    num_heads=4,
+                    use_short_conv=True,
+                    feature_map="relu",
+                ),
+            ),
+        ]
+    )
 
     # =============================================
     # Category 52: MQA + no output_gate
     # =============================================
-    test_cases.extend([
-        ("Layer: MQA + no gate",
-         lambda: run_test_layer(B=2, T=32, hidden_size=128, num_heads=4,
-                                num_kv_heads=2, use_output_gate=False,
-                                fuse_norm=False)),
-    ])
+    test_cases.extend(
+        [
+            (
+                "Layer: MQA + no gate",
+                lambda: run_test_layer(
+                    B=2,
+                    T=32,
+                    hidden_size=128,
+                    num_heads=4,
+                    num_kv_heads=2,
+                    use_output_gate=False,
+                    fuse_norm=False,
+                ),
+            ),
+        ]
+    )
 
     # =============================================
     # Category 53: T=65 boundary (mode switch)
     # =============================================
-    test_cases.extend([
-        ("Layer: T=65 mode boundary",
-         lambda: run_test_layer(B=1, T=65, hidden_size=128, num_heads=4)),
-    ])
+    test_cases.extend(
+        [
+            (
+                "Layer: T=65 mode boundary",
+                lambda: run_test_layer(B=1, T=65, hidden_size=128, num_heads=4),
+            ),
+        ]
+    )
 
     # Run all tests
     all_passed = True
@@ -2440,7 +2968,7 @@ def main():
             else:
                 all_passed = False
         except Exception:
-            print(f"  ❌ Exception:")
+            print("  ❌ Exception:")
             traceback.print_exc()
             all_passed = False
 
@@ -2455,6 +2983,6 @@ def main():
     return all_passed
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     success = main()
     exit(0 if success else 1)

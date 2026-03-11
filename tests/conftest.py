@@ -16,7 +16,7 @@ def seed():
     torch.manual_seed(42)
 
 
-DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 
 @pytest.fixture

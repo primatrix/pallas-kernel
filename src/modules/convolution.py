@@ -16,7 +16,7 @@ class ShortConvolution(nnx.Module):
         hidden_size: int,
         kernel_size: int,
         bias: bool = False,
-        activation: str | None = 'silu',
+        activation: str | None = "silu",
         *,
         rngs: nnx.Rngs,
     ):
@@ -32,12 +32,12 @@ class ShortConvolution(nnx.Module):
             kernel_size=(kernel_size,),
             feature_group_count=hidden_size,
             use_bias=bias,
-            padding='VALID',
+            padding="VALID",
             rngs=rngs,
         )
 
     def _apply_activation(self, x: jnp.ndarray) -> jnp.ndarray:
-        if self.activation in ('silu', 'swish'):
+        if self.activation in ("silu", "swish"):
             return jax.nn.silu(x)
         return x
 
@@ -94,7 +94,7 @@ class ShortConvolution(nnx.Module):
 
         # Get current token
         if cu_seqlens is not None:
-            x_step = x[0]   # [N, D]
+            x_step = x[0]  # [N, D]
         else:
             x_step = x[:, 0, :]  # [B, D]
 

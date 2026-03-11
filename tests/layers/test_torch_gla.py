@@ -24,9 +24,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-import numpy as np
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
 
@@ -58,11 +56,12 @@ from tests.src.modules.fused_norm_gate import FusedRMSNormGated as CpuFNG
 from tests.src.modules.convolution import ShortConvolution as CpuShortConv
 from tests.utils import compare_tensor
 
-DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 # =============================================================================
 # Helpers
 # =============================================================================
+
 
 def to_gpu(sd: dict) -> dict:
     return {k: v.to(DEVICE) for k, v in sd.items()}
@@ -77,6 +76,7 @@ def to_cpu(sd: dict) -> dict:
 # =============================================================================
 
 # --- A1: naive_recurrent_gla ---
+
 
 def test_triton_naive_basic() -> bool:
     """Triton naive vs Torch_CPU naive: basic shapes."""
@@ -119,8 +119,12 @@ def test_triton_naive_initial_state() -> bool:
     gk = F.logsigmoid(torch.randn(B, T, H, K))
     h0 = torch.randn(B, H, K, V)
 
-    o_triton, s_triton = triton_naive_recurrent_gla(q, k, v, gk, initial_state=h0, output_final_state=True)
-    o_cpu, s_cpu = cpu_naive_recurrent_gla(q, k, v, gk, initial_state=h0, output_final_state=True)
+    o_triton, s_triton = triton_naive_recurrent_gla(
+        q, k, v, gk, initial_state=h0, output_final_state=True
+    )
+    o_cpu, s_cpu = cpu_naive_recurrent_gla(
+        q, k, v, gk, initial_state=h0, output_final_state=True
+    )
     ok = compare_tensor("output", o_triton, o_cpu)
     ok &= compare_tensor("final_state", s_triton, s_cpu)
     return ok
@@ -131,7 +135,11 @@ def test_triton_naive_various_shapes() -> bool:
     print("\n[Triton Kernel] naive: various shapes")
     torch.manual_seed(99)
     ok = True
-    for B, T, H, K, V in [(1, 16, 1, 16, 16), (4, 64, 8, 32, 64), (1, 256, 2, 128, 128)]:
+    for B, T, H, K, V in [
+        (1, 16, 1, 16, 16),
+        (4, 64, 8, 32, 64),
+        (1, 256, 2, 128, 128),
+    ]:
         q = torch.randn(B, T, H, K)
         k = torch.randn(B, T, H, K)
         v = torch.randn(B, T, H, V)
@@ -139,7 +147,9 @@ def test_triton_naive_various_shapes() -> bool:
         o_triton, _ = triton_naive_recurrent_gla(q, k, v, gk)
         o_cpu, _ = cpu_naive_recurrent_gla(q, k, v, gk)
         atol = 1e-4 if K > 64 or T > 128 else 1e-5
-        ok &= compare_tensor(f"B={B} T={T} H={H} K={K} V={V}", o_triton, o_cpu, atol=atol, rtol=atol)
+        ok &= compare_tensor(
+            f"B={B} T={T} H={H} K={K} V={V}", o_triton, o_cpu, atol=atol, rtol=atol
+        )
     return ok
 
 
@@ -153,16 +163,36 @@ def test_triton_naive_state_split() -> bool:
     v = torch.randn(B, T, H, V)
     gk = F.logsigmoid(torch.randn(B, T, H, K))
 
-    o_full_triton, s_full_triton = triton_naive_recurrent_gla(q, k, v, gk, output_final_state=True)
-    o_full_cpu, s_full_cpu = cpu_naive_recurrent_gla(q, k, v, gk, output_final_state=True)
+    o_full_triton, s_full_triton = triton_naive_recurrent_gla(
+        q, k, v, gk, output_final_state=True
+    )
+    o_full_cpu, s_full_cpu = cpu_naive_recurrent_gla(
+        q, k, v, gk, output_final_state=True
+    )
 
     T1 = T // 2
-    _, s1_triton = triton_naive_recurrent_gla(q[:, :T1], k[:, :T1], v[:, :T1], gk[:, :T1], output_final_state=True)
-    o2_triton, s2_triton = triton_naive_recurrent_gla(q[:, T1:], k[:, T1:], v[:, T1:], gk[:, T1:],
-                                                       initial_state=s1_triton, output_final_state=True)
-    _, s1_cpu = cpu_naive_recurrent_gla(q[:, :T1], k[:, :T1], v[:, :T1], gk[:, :T1], output_final_state=True)
-    o2_cpu, s2_cpu = cpu_naive_recurrent_gla(q[:, T1:], k[:, T1:], v[:, T1:], gk[:, T1:],
-                                              initial_state=s1_cpu, output_final_state=True)
+    _, s1_triton = triton_naive_recurrent_gla(
+        q[:, :T1], k[:, :T1], v[:, :T1], gk[:, :T1], output_final_state=True
+    )
+    o2_triton, s2_triton = triton_naive_recurrent_gla(
+        q[:, T1:],
+        k[:, T1:],
+        v[:, T1:],
+        gk[:, T1:],
+        initial_state=s1_triton,
+        output_final_state=True,
+    )
+    _, s1_cpu = cpu_naive_recurrent_gla(
+        q[:, :T1], k[:, :T1], v[:, :T1], gk[:, :T1], output_final_state=True
+    )
+    o2_cpu, s2_cpu = cpu_naive_recurrent_gla(
+        q[:, T1:],
+        k[:, T1:],
+        v[:, T1:],
+        gk[:, T1:],
+        initial_state=s1_cpu,
+        output_final_state=True,
+    )
 
     ok = compare_tensor("full output (triton vs cpu)", o_full_triton, o_full_cpu)
     ok &= compare_tensor("full state (triton vs cpu)", s_full_triton, s_full_cpu)
@@ -175,6 +205,7 @@ def test_triton_naive_state_split() -> bool:
 
 # --- A2: chunk_gla (CUDA) ---
 
+
 def test_triton_chunk_basic() -> bool:
     """Triton chunk_gla (CUDA) vs Torch_CPU chunk_gla."""
     print("\n[Triton Kernel] chunk_gla (GPU) vs Torch_CPU (CPU)")
@@ -185,8 +216,9 @@ def test_triton_chunk_basic() -> bool:
     v = torch.randn(B, T, H, V)
     gk = F.logsigmoid(torch.randn(B, T, H, K))
 
-    o_triton, s_triton = triton_chunk_gla(q.to(DEVICE), k.to(DEVICE), v.to(DEVICE), gk.to(DEVICE),
-                                           output_final_state=True)
+    o_triton, s_triton = triton_chunk_gla(
+        q.to(DEVICE), k.to(DEVICE), v.to(DEVICE), gk.to(DEVICE), output_final_state=True
+    )
     o_cpu, s_cpu = cpu_chunk_gla(q, k, v, gk, output_final_state=True)
     ok = compare_tensor("output", o_triton.cpu(), o_cpu, atol=2e-2, rtol=2e-2)
     ok &= compare_tensor("final_state", s_triton.cpu(), s_cpu, atol=2e-2, rtol=2e-2)
@@ -204,8 +236,14 @@ def test_triton_chunk_init_state() -> bool:
     gk = F.logsigmoid(torch.randn(B, T, H, K))
     h0 = torch.randn(B, H, K, V)
 
-    o_triton, s_triton = triton_chunk_gla(q.to(DEVICE), k.to(DEVICE), v.to(DEVICE), gk.to(DEVICE),
-                                           initial_state=h0.to(DEVICE), output_final_state=True)
+    o_triton, s_triton = triton_chunk_gla(
+        q.to(DEVICE),
+        k.to(DEVICE),
+        v.to(DEVICE),
+        gk.to(DEVICE),
+        initial_state=h0.to(DEVICE),
+        output_final_state=True,
+    )
     o_cpu, s_cpu = cpu_chunk_gla(q, k, v, gk, initial_state=h0, output_final_state=True)
     ok = compare_tensor("output", o_triton.cpu(), o_cpu, atol=2e-2, rtol=2e-2)
     ok &= compare_tensor("final_state", s_triton.cpu(), s_cpu, atol=2e-2, rtol=2e-2)
@@ -213,6 +251,7 @@ def test_triton_chunk_init_state() -> bool:
 
 
 # --- A3: fused_recurrent_gla (CUDA) ---
+
 
 def test_triton_fused_recurrent_basic() -> bool:
     """Triton fused_recurrent_gla (CUDA) vs Torch_CPU naive."""
@@ -224,8 +263,9 @@ def test_triton_fused_recurrent_basic() -> bool:
     v = torch.randn(B, T, H, V)
     gk = F.logsigmoid(torch.randn(B, T, H, K))
 
-    o_triton, s_triton = triton_fused_recurrent_gla(q.to(DEVICE), k.to(DEVICE), v.to(DEVICE), gk.to(DEVICE),
-                                                     output_final_state=True)
+    o_triton, s_triton = triton_fused_recurrent_gla(
+        q.to(DEVICE), k.to(DEVICE), v.to(DEVICE), gk.to(DEVICE), output_final_state=True
+    )
     o_cpu, s_cpu = cpu_naive_recurrent_gla(q, k, v, gk, output_final_state=True)
     ok = compare_tensor("output", o_triton.cpu(), o_cpu, atol=1e-4, rtol=1e-4)
     ok &= compare_tensor("final_state", s_triton.cpu(), s_cpu, atol=1e-4, rtol=1e-4)
@@ -243,9 +283,17 @@ def test_triton_fused_recurrent_init_state() -> bool:
     gk = F.logsigmoid(torch.randn(B, T, H, K))
     h0 = torch.randn(B, H, K, V)
 
-    o_triton, s_triton = triton_fused_recurrent_gla(q.to(DEVICE), k.to(DEVICE), v.to(DEVICE), gk.to(DEVICE),
-                                                     initial_state=h0.to(DEVICE), output_final_state=True)
-    o_cpu, s_cpu = cpu_naive_recurrent_gla(q, k, v, gk, initial_state=h0, output_final_state=True)
+    o_triton, s_triton = triton_fused_recurrent_gla(
+        q.to(DEVICE),
+        k.to(DEVICE),
+        v.to(DEVICE),
+        gk.to(DEVICE),
+        initial_state=h0.to(DEVICE),
+        output_final_state=True,
+    )
+    o_cpu, s_cpu = cpu_naive_recurrent_gla(
+        q, k, v, gk, initial_state=h0, output_final_state=True
+    )
     ok = compare_tensor("output", o_triton.cpu(), o_cpu, atol=1e-4, rtol=1e-4)
     ok &= compare_tensor("final_state", s_triton.cpu(), s_cpu, atol=1e-4, rtol=1e-4)
     return ok
@@ -255,6 +303,7 @@ def test_triton_fused_recurrent_init_state() -> bool:
 # Part B: Triton Module Tests (vs Torch_CPU reference)
 # =============================================================================
 
+
 def test_triton_rmsnorm() -> bool:
     """Triton RMSNorm (CUDA) vs Torch_CPU RMSNorm."""
     print("\n[Triton Module] RMSNorm vs Torch_CPU")
@@ -263,7 +312,8 @@ def test_triton_rmsnorm() -> bool:
     triton_norm = TritonRMSNorm(dim, elementwise_affine=True, eps=1e-5).to(DEVICE)
     cpu_norm = CpuRMSNorm(dim, elementwise_affine=True, eps=1e-5)
     cpu_norm.load_state_dict(to_cpu(triton_norm.state_dict()))
-    triton_norm.eval(); cpu_norm.eval()
+    triton_norm.eval()
+    cpu_norm.eval()
 
     x = torch.randn(2, 10, dim)
     with torch.no_grad():
@@ -280,7 +330,8 @@ def test_triton_fused_norm_gated() -> bool:
     triton_fn = TritonFNG(dim, elementwise_affine=True, eps=1e-5).to(DEVICE)
     cpu_fn = CpuFNG(dim, elementwise_affine=True, eps=1e-5)
     cpu_fn.load_state_dict(to_cpu(triton_fn.state_dict()))
-    triton_fn.eval(); cpu_fn.eval()
+    triton_fn.eval()
+    cpu_fn.eval()
 
     x = torch.randn(2, 10, dim)
     g = torch.randn(2, 10, dim)
@@ -294,26 +345,34 @@ def test_triton_short_conv() -> bool:
     """Triton ShortConvolution (CUDA) vs Torch_CPU."""
     print("\n[Triton Module] ShortConvolution vs Torch_CPU")
     torch.manual_seed(42)
-    triton_conv = TritonShortConv(hidden_size=32, kernel_size=4, bias=True, activation='silu').to(DEVICE)
-    cpu_conv = CpuShortConv(hidden_size=32, kernel_size=4, bias=True, activation='silu')
+    triton_conv = TritonShortConv(
+        hidden_size=32, kernel_size=4, bias=True, activation="silu"
+    ).to(DEVICE)
+    cpu_conv = CpuShortConv(hidden_size=32, kernel_size=4, bias=True, activation="silu")
     cpu_conv.load_state_dict(to_cpu(triton_conv.state_dict()))
-    triton_conv.eval(); cpu_conv.eval()
+    triton_conv.eval()
+    cpu_conv.eval()
 
     x = torch.randn(2, 16, 32)
     with torch.no_grad():
         y_triton, _ = triton_conv(x.to(DEVICE))
         y_cpu, _ = cpu_conv(x)
-    return compare_tensor("ShortConv output", y_triton.cpu(), y_cpu, atol=1e-5, rtol=1e-5)
+    return compare_tensor(
+        "ShortConv output", y_triton.cpu(), y_cpu, atol=1e-5, rtol=1e-5
+    )
 
 
 def test_triton_short_conv_cache() -> bool:
     """Triton ShortConvolution (CUDA) vs Torch_CPU: cache output."""
     print("\n[Triton Module] ShortConvolution vs Torch_CPU: cache")
     torch.manual_seed(42)
-    triton_conv = TritonShortConv(hidden_size=16, kernel_size=4, bias=True, activation='silu').to(DEVICE)
-    cpu_conv = CpuShortConv(hidden_size=16, kernel_size=4, bias=True, activation='silu')
+    triton_conv = TritonShortConv(
+        hidden_size=16, kernel_size=4, bias=True, activation="silu"
+    ).to(DEVICE)
+    cpu_conv = CpuShortConv(hidden_size=16, kernel_size=4, bias=True, activation="silu")
     cpu_conv.load_state_dict(to_cpu(triton_conv.state_dict()))
-    triton_conv.eval(); cpu_conv.eval()
+    triton_conv.eval()
+    cpu_conv.eval()
 
     x = torch.randn(1, 8, 16)
     with torch.no_grad():
@@ -328,16 +387,24 @@ def test_triton_short_conv_cache() -> bool:
 # Part C: Triton Layer Tests (vs Torch_CPU reference)
 # =============================================================================
 
+
 def test_triton_layer_basic() -> bool:
     """Triton GLA layer (CUDA) vs Torch_CPU: basic forward."""
     print("\n[Triton Layer] vs Torch_CPU: basic (B=2, T=32, D=128, H=2)")
     torch.manual_seed(42)
-    cfg = dict(hidden_size=128, num_heads=2, use_short_conv=False,
-               use_output_gate=True, fuse_norm=True, layer_idx=0)
+    cfg = dict(
+        hidden_size=128,
+        num_heads=2,
+        use_short_conv=False,
+        use_output_gate=True,
+        fuse_norm=True,
+        layer_idx=0,
+    )
     triton_m = TritonGLA(**cfg).to(DEVICE)
     cpu_m = CpuGLA(**cfg)
     cpu_m.load_state_dict(to_cpu(triton_m.state_dict()))
-    triton_m.eval(); cpu_m.eval()
+    triton_m.eval()
+    cpu_m.eval()
 
     x = torch.randn(2, 32, 128)
     with torch.no_grad():
@@ -350,12 +417,20 @@ def test_triton_layer_conv() -> bool:
     """Triton GLA layer (CUDA) vs Torch_CPU: with ShortConvolution."""
     print("\n[Triton Layer] vs Torch_CPU: with ShortConvolution")
     torch.manual_seed(42)
-    cfg = dict(hidden_size=128, num_heads=2, use_short_conv=True, conv_size=4,
-               use_output_gate=True, fuse_norm=True, layer_idx=0)
+    cfg = dict(
+        hidden_size=128,
+        num_heads=2,
+        use_short_conv=True,
+        conv_size=4,
+        use_output_gate=True,
+        fuse_norm=True,
+        layer_idx=0,
+    )
     triton_m = TritonGLA(**cfg).to(DEVICE)
     cpu_m = CpuGLA(**cfg)
     cpu_m.load_state_dict(to_cpu(triton_m.state_dict()))
-    triton_m.eval(); cpu_m.eval()
+    triton_m.eval()
+    cpu_m.eval()
 
     x = torch.randn(2, 32, 128)
     with torch.no_grad():
@@ -368,12 +443,19 @@ def test_triton_layer_mqa() -> bool:
     """Triton GLA layer (CUDA) vs Torch_CPU: MQA config."""
     print("\n[Triton Layer] vs Torch_CPU: MQA (H=8, KV=2)")
     torch.manual_seed(42)
-    cfg = dict(hidden_size=256, num_heads=8, num_kv_heads=2,
-               use_output_gate=True, fuse_norm=True, layer_idx=0)
+    cfg = dict(
+        hidden_size=256,
+        num_heads=8,
+        num_kv_heads=2,
+        use_output_gate=True,
+        fuse_norm=True,
+        layer_idx=0,
+    )
     triton_m = TritonGLA(**cfg).to(DEVICE)
     cpu_m = CpuGLA(**cfg)
     cpu_m.load_state_dict(to_cpu(triton_m.state_dict()))
-    triton_m.eval(); cpu_m.eval()
+    triton_m.eval()
+    cpu_m.eval()
 
     x = torch.randn(2, 64, 256)
     with torch.no_grad():
@@ -386,12 +468,18 @@ def test_triton_layer_no_gate() -> bool:
     """Triton GLA layer (CUDA) vs Torch_CPU: no output gate."""
     print("\n[Triton Layer] vs Torch_CPU: no output gate")
     torch.manual_seed(42)
-    cfg = dict(hidden_size=128, num_heads=2, use_output_gate=False,
-               fuse_norm=False, layer_idx=0)
+    cfg = dict(
+        hidden_size=128,
+        num_heads=2,
+        use_output_gate=False,
+        fuse_norm=False,
+        layer_idx=0,
+    )
     triton_m = TritonGLA(**cfg).to(DEVICE)
     cpu_m = CpuGLA(**cfg)
     cpu_m.load_state_dict(to_cpu(triton_m.state_dict()))
-    triton_m.eval(); cpu_m.eval()
+    triton_m.eval()
+    cpu_m.eval()
 
     x = torch.randn(2, 32, 128)
     with torch.no_grad():
@@ -406,12 +494,20 @@ def test_triton_layer_expand() -> bool:
     ok = True
     for ek, ev in [(1.0, 1.0), (0.25, 2.0)]:
         torch.manual_seed(42)
-        cfg = dict(hidden_size=128, num_heads=4, expand_k=ek, expand_v=ev,
-                   use_output_gate=True, fuse_norm=True, layer_idx=0)
+        cfg = dict(
+            hidden_size=128,
+            num_heads=4,
+            expand_k=ek,
+            expand_v=ev,
+            use_output_gate=True,
+            fuse_norm=True,
+            layer_idx=0,
+        )
         triton_m = TritonGLA(**cfg).to(DEVICE)
         cpu_m = CpuGLA(**cfg)
         cpu_m.load_state_dict(to_cpu(triton_m.state_dict()))
-        triton_m.eval(); cpu_m.eval()
+        triton_m.eval()
+        cpu_m.eval()
 
         x = torch.randn(1, 32, 128)
         with torch.no_grad():
@@ -425,12 +521,14 @@ def test_triton_layer_mask() -> bool:
     """Triton GLA layer (CUDA) vs Torch_CPU: attention_mask."""
     print("\n[Triton Layer] vs Torch_CPU: attention_mask")
     torch.manual_seed(42)
-    cfg = dict(hidden_size=128, num_heads=2, use_output_gate=True,
-               fuse_norm=True, layer_idx=0)
+    cfg = dict(
+        hidden_size=128, num_heads=2, use_output_gate=True, fuse_norm=True, layer_idx=0
+    )
     triton_m = TritonGLA(**cfg).to(DEVICE)
     cpu_m = CpuGLA(**cfg)
     cpu_m.load_state_dict(to_cpu(triton_m.state_dict()))
-    triton_m.eval(); cpu_m.eval()
+    triton_m.eval()
+    cpu_m.eval()
 
     B, T, D = 2, 32, 128
     x = torch.randn(B, T, D)
@@ -448,12 +546,14 @@ def test_triton_layer_long_seq() -> bool:
     """Triton GLA layer (CUDA) vs Torch_CPU: longer sequence (T=256)."""
     print("\n[Triton Layer] vs Torch_CPU: long seq (T=256)")
     torch.manual_seed(7)
-    cfg = dict(hidden_size=128, num_heads=2, use_output_gate=True,
-               fuse_norm=True, layer_idx=0)
+    cfg = dict(
+        hidden_size=128, num_heads=2, use_output_gate=True, fuse_norm=True, layer_idx=0
+    )
     triton_m = TritonGLA(**cfg).to(DEVICE)
     cpu_m = CpuGLA(**cfg)
     cpu_m.load_state_dict(to_cpu(triton_m.state_dict()))
-    triton_m.eval(); cpu_m.eval()
+    triton_m.eval()
+    cpu_m.eval()
 
     x = torch.randn(1, 256, 128)
     with torch.no_grad():
@@ -466,12 +566,19 @@ def test_triton_layer_clamp() -> bool:
     """Triton GLA layer (CUDA) vs Torch_CPU: clamp_min."""
     print("\n[Triton Layer] vs Torch_CPU: clamp_min=-1.0")
     torch.manual_seed(42)
-    cfg = dict(hidden_size=128, num_heads=2, clamp_min=-1.0,
-               use_output_gate=True, fuse_norm=True, layer_idx=0)
+    cfg = dict(
+        hidden_size=128,
+        num_heads=2,
+        clamp_min=-1.0,
+        use_output_gate=True,
+        fuse_norm=True,
+        layer_idx=0,
+    )
     triton_m = TritonGLA(**cfg).to(DEVICE)
     cpu_m = CpuGLA(**cfg)
     cpu_m.load_state_dict(to_cpu(triton_m.state_dict()))
-    triton_m.eval(); cpu_m.eval()
+    triton_m.eval()
+    cpu_m.eval()
 
     x = torch.randn(1, 32, 128)
     with torch.no_grad():
@@ -484,20 +591,53 @@ def test_triton_layer_clamp() -> bool:
 # Part D: Architecture Parity (Triton vs Torch_CPU)
 # =============================================================================
 
+
 def test_arch_state_dict_keys() -> bool:
     """Triton vs Torch_CPU: state_dict keys match across configs."""
     print("\n[Arch] state_dict keys match across configs")
     configs = [
-        dict(hidden_size=128, num_heads=2, use_short_conv=False,
-             use_output_gate=True, fuse_norm=True, layer_idx=0),
-        dict(hidden_size=128, num_heads=2, use_short_conv=True, conv_size=4,
-             use_output_gate=True, fuse_norm=True, layer_idx=0),
-        dict(hidden_size=128, num_heads=2, use_short_conv=False,
-             use_output_gate=False, fuse_norm=False, layer_idx=0),
-        dict(hidden_size=256, num_heads=8, num_kv_heads=2,
-             use_output_gate=True, fuse_norm=True, layer_idx=0),
-        dict(hidden_size=128, num_heads=4, expand_k=1.0, expand_v=2.0,
-             use_output_gate=True, fuse_norm=True, layer_idx=0),
+        dict(
+            hidden_size=128,
+            num_heads=2,
+            use_short_conv=False,
+            use_output_gate=True,
+            fuse_norm=True,
+            layer_idx=0,
+        ),
+        dict(
+            hidden_size=128,
+            num_heads=2,
+            use_short_conv=True,
+            conv_size=4,
+            use_output_gate=True,
+            fuse_norm=True,
+            layer_idx=0,
+        ),
+        dict(
+            hidden_size=128,
+            num_heads=2,
+            use_short_conv=False,
+            use_output_gate=False,
+            fuse_norm=False,
+            layer_idx=0,
+        ),
+        dict(
+            hidden_size=256,
+            num_heads=8,
+            num_kv_heads=2,
+            use_output_gate=True,
+            fuse_norm=True,
+            layer_idx=0,
+        ),
+        dict(
+            hidden_size=128,
+            num_heads=4,
+            expand_k=1.0,
+            expand_v=2.0,
+            use_output_gate=True,
+            fuse_norm=True,
+            layer_idx=0,
+        ),
     ]
     ok = True
     for i, cfg in enumerate(configs):
@@ -507,7 +647,7 @@ def test_arch_state_dict_keys() -> bool:
         cpu_keys = sorted(cpu_m.state_dict().keys())
         match = triton_keys == cpu_keys
         ok &= match
-        label = ', '.join(f'{k}={v}' for k, v in cfg.items() if k != 'layer_idx')
+        label = ", ".join(f"{k}={v}" for k, v in cfg.items() if k != "layer_idx")
         print(f"  {'[PASS]' if match else '[FAIL]'} cfg{i}({label})")
         if not match:
             print(f"      Triton only: {set(triton_keys) - set(cpu_keys)}")
@@ -519,8 +659,15 @@ def test_arch_weight_transfer() -> bool:
     """Triton <-> Torch_CPU: bidirectional weight transfer."""
     print("\n[Arch] bidirectional weight transfer")
     torch.manual_seed(100)
-    cfg = dict(hidden_size=256, num_heads=4, use_short_conv=True, conv_size=4,
-               use_output_gate=True, fuse_norm=True, layer_idx=0)
+    cfg = dict(
+        hidden_size=256,
+        num_heads=4,
+        use_short_conv=True,
+        conv_size=4,
+        use_output_gate=True,
+        fuse_norm=True,
+        layer_idx=0,
+    )
     triton_m = TritonGLA(**cfg)
     cpu_m = CpuGLA(**cfg)
 
@@ -540,23 +687,43 @@ def test_arch_weight_transfer() -> bool:
 def test_arch_attributes() -> bool:
     """Triton vs Torch_CPU: key attributes/config match."""
     print("\n[Arch] attribute parity")
-    cfg = dict(hidden_size=256, num_heads=8, num_kv_heads=2,
-               expand_k=0.5, expand_v=1.0, gate_logit_normalizer=16,
-               clamp_min=-1.0, use_output_gate=True, fuse_norm=True, layer_idx=0)
+    cfg = dict(
+        hidden_size=256,
+        num_heads=8,
+        num_kv_heads=2,
+        expand_k=0.5,
+        expand_v=1.0,
+        gate_logit_normalizer=16,
+        clamp_min=-1.0,
+        use_output_gate=True,
+        fuse_norm=True,
+        layer_idx=0,
+    )
     triton_m = TritonGLA(**cfg)
     cpu_m = CpuGLA(**cfg)
     attrs = [
-        'hidden_size', 'num_heads', 'num_kv_heads', 'num_kv_groups',
-        'key_dim', 'value_dim', 'head_k_dim', 'head_v_dim',
-        'key_dim_per_group', 'value_dim_per_group',
-        'expand_k', 'expand_v', 'gate_logit_normalizer',
-        'clamp_min', 'use_output_gate', 'use_short_conv',
-        'fuse_norm_and_gate',
+        "hidden_size",
+        "num_heads",
+        "num_kv_heads",
+        "num_kv_groups",
+        "key_dim",
+        "value_dim",
+        "head_k_dim",
+        "head_v_dim",
+        "key_dim_per_group",
+        "value_dim_per_group",
+        "expand_k",
+        "expand_v",
+        "gate_logit_normalizer",
+        "clamp_min",
+        "use_output_gate",
+        "use_short_conv",
+        "fuse_norm_and_gate",
     ]
     ok = True
     for attr in attrs:
-        triton_val = getattr(triton_m, attr, 'MISSING')
-        cpu_val = getattr(cpu_m, attr, 'MISSING')
+        triton_val = getattr(triton_m, attr, "MISSING")
+        cpu_val = getattr(cpu_m, attr, "MISSING")
         match = triton_val == cpu_val
         ok &= match
         if not match:
@@ -571,7 +738,9 @@ def test_arch_param_count() -> bool:
     print("\n[Arch] parameter count match")
     configs = [
         dict(hidden_size=256, num_heads=4, layer_idx=0),
-        dict(hidden_size=256, num_heads=4, use_short_conv=True, conv_size=4, layer_idx=0),
+        dict(
+            hidden_size=256, num_heads=4, use_short_conv=True, conv_size=4, layer_idx=0
+        ),
         dict(hidden_size=256, num_heads=8, num_kv_heads=2, layer_idx=0),
         dict(hidden_size=512, num_heads=8, expand_k=1.0, expand_v=2.0, layer_idx=0),
     ]
@@ -583,7 +752,9 @@ def test_arch_param_count() -> bool:
         cpu_n = sum(p.numel() for p in cpu_m.parameters())
         match = triton_n == cpu_n
         ok &= match
-        print(f"  {'[PASS]' if match else '[FAIL]'} cfg{i}: Triton={triton_n:,} CPU={cpu_n:,} params")
+        print(
+            f"  {'[PASS]' if match else '[FAIL]'} cfg{i}: Triton={triton_n:,} CPU={cpu_n:,} params"
+        )
     return ok
 
 
@@ -592,6 +763,7 @@ def test_arch_param_count() -> bool:
 # =============================================================================
 
 # --- E1: Internal equivalence (chunk vs naive, fused_chunk vs naive) ---
+
 
 def test_cpu_chunk_vs_naive() -> bool:
     """Torch_CPU chunk_gla vs naive_recurrent_gla equivalence."""
@@ -621,8 +793,12 @@ def test_cpu_chunk_vs_naive_init_state() -> bool:
     gk = F.logsigmoid(torch.randn(B, T, H, K))
     h0 = torch.randn(B, H, K, V)
 
-    o_naive, s_naive = cpu_naive_recurrent_gla(q, k, v, gk, initial_state=h0, output_final_state=True)
-    o_chunk, s_chunk = cpu_chunk_gla(q, k, v, gk, initial_state=h0, output_final_state=True)
+    o_naive, s_naive = cpu_naive_recurrent_gla(
+        q, k, v, gk, initial_state=h0, output_final_state=True
+    )
+    o_chunk, s_chunk = cpu_chunk_gla(
+        q, k, v, gk, initial_state=h0, output_final_state=True
+    )
     ok = compare_tensor("output", o_naive, o_chunk, atol=5e-5, rtol=5e-5)
     ok &= compare_tensor("final_state", s_naive, s_chunk, atol=5e-5, rtol=5e-5)
     return ok
@@ -662,6 +838,7 @@ def test_cpu_fused_chunk_vs_naive() -> bool:
 
 # --- E2: cu_seqlens consistency ---
 
+
 def test_cpu_cu_seqlens_vs_separate() -> bool:
     """cu_seqlens packed == separate batch processing."""
     print("\n[CPU] cu_seqlens packed vs separate batches")
@@ -685,7 +862,9 @@ def test_cpu_cu_seqlens_vs_separate() -> bool:
     v_cat = torch.cat([v1, v2], dim=1)
     g_cat = torch.cat([g1, g2], dim=1)
     cu = torch.tensor([0, s1_len, s1_len + s2_len], dtype=torch.long)
-    o_cu, s_cu = cpu_naive_recurrent_gla(q_cat, k_cat, v_cat, g_cat, output_final_state=True, cu_seqlens=cu)
+    o_cu, s_cu = cpu_naive_recurrent_gla(
+        q_cat, k_cat, v_cat, g_cat, output_final_state=True, cu_seqlens=cu
+    )
 
     ok = compare_tensor("seg1 output", o1, o_cu[:, :s1_len])
     ok &= compare_tensor("seg2 output", o2, o_cu[:, s1_len:])
@@ -695,6 +874,7 @@ def test_cpu_cu_seqlens_vs_separate() -> bool:
 
 
 # --- E3: Module standalone ---
+
 
 def test_cpu_rmsnorm_standalone() -> bool:
     """Torch_CPU RMSNorm standalone correctness."""
@@ -733,7 +913,7 @@ def test_cpu_fused_norm_gated_standalone() -> bool:
 def test_cpu_short_conv_causal() -> bool:
     """Torch_CPU ShortConvolution: causality property."""
     print("\n[CPU] ShortConv causality verification")
-    conv = CpuShortConv(hidden_size=8, kernel_size=3, bias=True, activation='silu')
+    conv = CpuShortConv(hidden_size=8, kernel_size=3, bias=True, activation="silu")
     x1 = torch.randn(1, 16, 8)
     x2 = x1.clone()
     x2[:, 10:, :] = torch.randn(1, 6, 8)
@@ -751,7 +931,7 @@ def test_cpu_short_conv_causal() -> bool:
 def test_cpu_short_conv_cu_seqlens() -> bool:
     """Torch_CPU ShortConvolution: cu_seqlens packed == separate."""
     print("\n[CPU] ShortConv cu_seqlens vs separate")
-    conv = CpuShortConv(hidden_size=8, kernel_size=3, bias=False, activation='silu')
+    conv = CpuShortConv(hidden_size=8, kernel_size=3, bias=False, activation="silu")
     x_s1 = torch.randn(1, 6, 8)
     x_s2 = torch.randn(1, 10, 8)
     y_s1, _ = conv(x_s1)
@@ -767,10 +947,12 @@ def test_cpu_short_conv_cu_seqlens() -> bool:
 def test_cpu_short_conv_step() -> bool:
     """Torch_CPU ShortConvolution: step (single-token decode with cache)."""
     print("\n[CPU] ShortConv step decode with cache")
-    conv = CpuShortConv(hidden_size=16, kernel_size=4, bias=True, activation='silu')
+    conv = CpuShortConv(hidden_size=16, kernel_size=4, bias=True, activation="silu")
     x_pre = torch.randn(1, 8, 16)
     y_pre, cache = conv(x_pre, output_final_state=True)
-    assert cache is not None and cache.shape == (1, 16, 4), f"Cache shape: {cache.shape}"
+    assert cache is not None and cache.shape == (1, 16, 4), (
+        f"Cache shape: {cache.shape}"
+    )
     x_dec = torch.randn(1, 1, 16)
     y_dec, cache_dec = conv.step(x_dec, cache, output_final_state=True)
     assert y_dec.shape == (1, 1, 16)
@@ -781,12 +963,19 @@ def test_cpu_short_conv_step() -> bool:
 
 # --- E4: Layer standalone ---
 
+
 def test_cpu_layer_basic() -> bool:
     """Torch_CPU GLA layer: basic forward."""
     print("\n[CPU Layer] basic forward (B=2, T=32, H=4, D=256)")
     torch.manual_seed(42)
-    model = CpuGLA(mode='chunk', hidden_size=256, num_heads=4,
-                    use_output_gate=True, fuse_norm=True, layer_idx=0)
+    model = CpuGLA(
+        mode="chunk",
+        hidden_size=256,
+        num_heads=4,
+        use_output_gate=True,
+        fuse_norm=True,
+        layer_idx=0,
+    )
     model.eval()
     x = torch.randn(2, 32, 256)
     with torch.no_grad():
@@ -799,8 +988,14 @@ def test_cpu_layer_basic() -> bool:
 def test_cpu_layer_feature_map() -> bool:
     """Torch_CPU GLA layer: feature_map='relu'."""
     print("\n[CPU Layer] feature_map=relu")
-    model = CpuGLA(hidden_size=128, num_heads=2, feature_map='relu',
-                    use_output_gate=True, fuse_norm=True, layer_idx=0)
+    model = CpuGLA(
+        hidden_size=128,
+        num_heads=2,
+        feature_map="relu",
+        use_output_gate=True,
+        fuse_norm=True,
+        layer_idx=0,
+    )
     model.eval()
     x = torch.randn(1, 16, 128)
     with torch.no_grad():
@@ -814,25 +1009,45 @@ def test_cpu_layer_normalizer() -> bool:
     """Different gate_logit_normalizer values produce different outputs."""
     print("\n[CPU Layer] gate_logit_normalizer effect")
     torch.manual_seed(200)
-    m16 = CpuGLA(hidden_size=128, num_heads=2, gate_logit_normalizer=16,
-                  use_output_gate=True, fuse_norm=True, layer_idx=0)
-    m1 = CpuGLA(hidden_size=128, num_heads=2, gate_logit_normalizer=1,
-                 use_output_gate=True, fuse_norm=True, layer_idx=0)
+    m16 = CpuGLA(
+        hidden_size=128,
+        num_heads=2,
+        gate_logit_normalizer=16,
+        use_output_gate=True,
+        fuse_norm=True,
+        layer_idx=0,
+    )
+    m1 = CpuGLA(
+        hidden_size=128,
+        num_heads=2,
+        gate_logit_normalizer=1,
+        use_output_gate=True,
+        fuse_norm=True,
+        layer_idx=0,
+    )
     m1.load_state_dict(m16.state_dict())
     x = torch.randn(1, 16, 128)
     with torch.no_grad():
         o16, _, _ = m16(x)
         o1, _, _ = m1(x)
     ok = not torch.allclose(o16, o1, atol=1e-3)
-    print(f"  {'[PASS]' if ok else '[FAIL]'} different normalizers -> different outputs")
+    print(
+        f"  {'[PASS]' if ok else '[FAIL]'} different normalizers -> different outputs"
+    )
     return ok
 
 
 def test_cpu_layer_seq1() -> bool:
     """Torch_CPU GLA layer: single token (T=1)."""
     print("\n[CPU Layer] T=1 single token")
-    model = CpuGLA(mode='chunk', hidden_size=256, num_heads=4,
-                    use_output_gate=True, fuse_norm=True, layer_idx=0)
+    model = CpuGLA(
+        mode="chunk",
+        hidden_size=256,
+        num_heads=4,
+        use_output_gate=True,
+        fuse_norm=True,
+        layer_idx=0,
+    )
     model.eval()
     x = torch.randn(2, 1, 256)
     with torch.no_grad():
@@ -844,28 +1059,46 @@ def test_cpu_layer_seq1() -> bool:
 
 # --- E5: Gradient tests ---
 
+
 def test_cpu_grad_basic() -> bool:
     """Gradient backward pass."""
     print("\n[CPU Grad] basic backward")
-    model = CpuGLA(mode='chunk', hidden_size=256, num_heads=4,
-                    use_output_gate=True, fuse_norm=True, layer_idx=0)
+    model = CpuGLA(
+        mode="chunk",
+        hidden_size=256,
+        num_heads=4,
+        use_output_gate=True,
+        fuse_norm=True,
+        layer_idx=0,
+    )
     x = torch.randn(2, 32, 256, requires_grad=True)
     o, _, _ = model(x)
     o.sum().backward()
     assert x.grad is not None and x.grad.shape == x.shape
-    n_grads = sum(1 for p in model.parameters() if p.requires_grad and p.grad is not None)
+    n_grads = sum(
+        1 for p in model.parameters() if p.requires_grad and p.grad is not None
+    )
     n_params = sum(1 for p in model.parameters() if p.requires_grad)
     ok = n_grads == n_params
-    print(f"  {'[PASS]' if ok else '[FAIL]'} {n_grads}/{n_params} params have gradients")
+    print(
+        f"  {'[PASS]' if ok else '[FAIL]'} {n_grads}/{n_params} params have gradients"
+    )
     return ok
 
 
 def test_cpu_grad_conv() -> bool:
     """Gradient backward with ShortConvolution."""
     print("\n[CPU Grad] backward with ShortConvolution")
-    model = CpuGLA(mode='chunk', hidden_size=256, num_heads=4,
-                    use_short_conv=True, conv_size=4,
-                    use_output_gate=True, fuse_norm=True, layer_idx=0)
+    model = CpuGLA(
+        mode="chunk",
+        hidden_size=256,
+        num_heads=4,
+        use_short_conv=True,
+        conv_size=4,
+        use_output_gate=True,
+        fuse_norm=True,
+        layer_idx=0,
+    )
     x = torch.randn(2, 32, 256, requires_grad=True)
     o, _, _ = model(x)
     o.sum().backward()
@@ -877,8 +1110,15 @@ def test_cpu_grad_conv() -> bool:
 def test_cpu_grad_mqa() -> bool:
     """Gradient backward with MQA."""
     print("\n[CPU Grad] backward with MQA")
-    model = CpuGLA(mode='chunk', hidden_size=256, num_heads=8, num_kv_heads=2,
-                    use_output_gate=True, fuse_norm=True, layer_idx=0)
+    model = CpuGLA(
+        mode="chunk",
+        hidden_size=256,
+        num_heads=8,
+        num_kv_heads=2,
+        use_output_gate=True,
+        fuse_norm=True,
+        layer_idx=0,
+    )
     x = torch.randn(2, 32, 256, requires_grad=True)
     o, _, _ = model(x)
     o.sum().backward()
@@ -889,11 +1129,13 @@ def test_cpu_grad_mqa() -> bool:
 
 # --- E6: Numerical stability & determinism ---
 
+
 def test_cpu_numerical_stability() -> bool:
     """No inf/nan with large/small inputs."""
     print("\n[CPU Stability] large/small inputs")
-    model = CpuGLA(hidden_size=128, num_heads=2, use_output_gate=True,
-                    fuse_norm=True, layer_idx=0)
+    model = CpuGLA(
+        hidden_size=128, num_heads=2, use_output_gate=True, fuse_norm=True, layer_idx=0
+    )
     model.eval()
     ok = True
     for scale, label in [(10.0, "large"), (0.001, "small")]:
@@ -910,12 +1152,16 @@ def test_cpu_determinism() -> bool:
     """Same seed -> same output."""
     print("\n[CPU Determinism] reproducibility")
     torch.manual_seed(42)
-    m1 = CpuGLA(hidden_size=128, num_heads=2, use_output_gate=True, fuse_norm=True, layer_idx=0)
+    m1 = CpuGLA(
+        hidden_size=128, num_heads=2, use_output_gate=True, fuse_norm=True, layer_idx=0
+    )
     x1 = torch.randn(1, 16, 128)
     with torch.no_grad():
         o1, _, _ = m1(x1)
     torch.manual_seed(42)
-    m2 = CpuGLA(hidden_size=128, num_heads=2, use_output_gate=True, fuse_norm=True, layer_idx=0)
+    m2 = CpuGLA(
+        hidden_size=128, num_heads=2, use_output_gate=True, fuse_norm=True, layer_idx=0
+    )
     x2 = torch.randn(1, 16, 128)
     with torch.no_grad():
         o2, _, _ = m2(x2)
@@ -925,6 +1171,7 @@ def test_cpu_determinism() -> bool:
 
 
 # --- E7: Utilities ---
+
 
 def test_cpu_unpad_pad_roundtrip() -> bool:
     """get_unpad_data / index_first_axis / pad_input roundtrip."""
@@ -936,7 +1183,7 @@ def test_cpu_unpad_pad_roundtrip() -> bool:
     mask[2, 10:] = 0
     indices, cu, max_len = get_unpad_data(mask)
     x = torch.randn(B, T, D)
-    x_flat = rearrange(x, 'b s d -> (b s) d')
+    x_flat = rearrange(x, "b s d -> (b s) d")
     x_packed = index_first_axis(x_flat, indices)
     x_restored = pad_input(x_packed, indices, B, T)
 
@@ -946,7 +1193,9 @@ def test_cpu_unpad_pad_roundtrip() -> bool:
         ok &= torch.allclose(x[b, :vl], x_restored[b, :vl], atol=1e-7)
     ok &= (x_restored[0, 15:] == 0).all().item()
     ok &= (x_restored[2, 10:] == 0).all().item()
-    print(f"  {'[PASS]' if ok else '[FAIL]'} packed {indices.shape[0]} tokens, restored correctly")
+    print(
+        f"  {'[PASS]' if ok else '[FAIL]'} packed {indices.shape[0]} tokens, restored correctly"
+    )
     return ok
 
 
@@ -955,6 +1204,7 @@ def test_cpu_unpad_pad_roundtrip() -> bool:
 # =============================================================================
 
 # --- F1: chunk_local_cumsum ---
+
 
 def test_cpu_chunk_local_cumsum() -> bool:
     """Verify chunk-local cumsum against manual computation."""
@@ -977,11 +1227,14 @@ def test_cpu_chunk_local_cumsum() -> bool:
     for n in range(1, NT):
         first_in_chunk = result[:, n * C]
         raw_g = g[:, n * C]
-        ok &= compare_tensor(f"chunk {n} reset", first_in_chunk, raw_g, atol=1e-7, rtol=1e-7)
+        ok &= compare_tensor(
+            f"chunk {n} reset", first_in_chunk, raw_g, atol=1e-7, rtol=1e-7
+        )
     return ok
 
 
 # --- F2: chunk_fwd_h ---
+
 
 def test_cpu_chunk_fwd_h() -> bool:
     """Verify inter-chunk hidden state: final state matches naive_recurrent_gla."""
@@ -1002,8 +1255,12 @@ def test_cpu_chunk_fwd_h() -> bool:
     gk_f = gk.float()
     g_cumsum = cpu_chunk_local_cumsum(gk_f, chunk_size=C)
     h_all, chunk_ht = cpu_chunk_fwd_h(
-        k.float(), v.float(), g_cumsum,
-        h0=None, output_final_state=True, chunk_size=C,
+        k.float(),
+        v.float(),
+        g_cumsum,
+        h0=None,
+        output_final_state=True,
+        chunk_size=C,
     )
 
     ok = compare_tensor("final state", chunk_ht, naive_ht.float(), atol=1e-4, rtol=1e-4)
@@ -1016,6 +1273,7 @@ def test_cpu_chunk_fwd_h() -> bool:
 
 # --- F3: chunk_gla_fwd_intra_gk ---
 
+
 def test_cpu_chunk_gla_fwd_intra_gk() -> bool:
     """Verify intra-chunk attention matrix via manual q*exp(g) @ (k*exp(-g))^T."""
     print("\n[CPU Sub] chunk_gla_fwd_intra_gk correctness")
@@ -1023,7 +1281,7 @@ def test_cpu_chunk_gla_fwd_intra_gk() -> bool:
     B, H, K, C = 1, 2, 8, 4
     NT = 2
     T = NT * C
-    scale = K ** -0.5
+    scale = K**-0.5
 
     q = torch.randn(B, T, H, K)
     k = torch.randn(B, T, H, K)
@@ -1039,7 +1297,7 @@ def test_cpu_chunk_gla_fwd_intra_gk() -> bool:
 
     q_gated = q_c * gc.exp()
     k_gated = k_c * (-gc).exp()
-    A_manual = torch.einsum('bnihk,bnjhk->bnhij', q_gated, k_gated)
+    A_manual = torch.einsum("bnihk,bnjhk->bnhij", q_gated, k_gated)
     causal_mask = torch.tril(torch.ones(C, C, dtype=torch.bool))
     A_manual = A_manual.masked_fill(~causal_mask, 0.0)
 
@@ -1053,13 +1311,14 @@ def test_cpu_chunk_gla_fwd_intra_gk() -> bool:
 
 # --- F4: chunk_gla_fwd_o_gk ---
 
+
 def test_cpu_chunk_gla_fwd_o_gk() -> bool:
     """Verify output given pre-computed A and h."""
     print("\n[CPU Sub] chunk_gla_fwd_o_gk correctness")
     torch.manual_seed(42)
     B, T, H, K, V = 1, 16, 2, 8, 16
     C = 8
-    scale = K ** -0.5
+    scale = K**-0.5
 
     q = torch.randn(B, T, H, K).float()
     k = torch.randn(B, T, H, K).float()
@@ -1073,9 +1332,12 @@ def test_cpu_chunk_gla_fwd_o_gk() -> bool:
 
     # compare_tensor with full chunk_gla
     o_ref, _ = cpu_chunk_gla(
-        q.to(torch.float32), k.to(torch.float32),
-        v.to(torch.float32), g.to(torch.float32),
-        scale=scale, chunk_size=C,
+        q.to(torch.float32),
+        k.to(torch.float32),
+        v.to(torch.float32),
+        g.to(torch.float32),
+        scale=scale,
+        chunk_size=C,
     )
 
     ok = compare_tensor("output", o, o_ref.float(), atol=1e-5, rtol=1e-5)
@@ -1084,13 +1346,14 @@ def test_cpu_chunk_gla_fwd_o_gk() -> bool:
 
 # --- F5: chunk_gla_fwd orchestrator ---
 
+
 def test_cpu_chunk_gla_fwd() -> bool:
     """Orchestrator chunk_gla_fwd vs chunk_gla results."""
     print("\n[CPU Sub] chunk_gla_fwd orchestrator vs chunk_gla")
     torch.manual_seed(42)
     B, T, H, K, V = 2, 50, 4, 16, 32
     C = 16
-    scale = K ** -0.5
+    scale = K**-0.5
 
     q = torch.randn(B, T, H, K)
     k = torch.randn(B, T, H, K)
@@ -1099,16 +1362,26 @@ def test_cpu_chunk_gla_fwd() -> bool:
     h0 = torch.randn(B, H, K, V) * 0.01
 
     o_ref, ht_ref = cpu_chunk_gla(
-        q, k, v, gk,
-        scale=scale, initial_state=h0,
-        output_final_state=True, chunk_size=C,
+        q,
+        k,
+        v,
+        gk,
+        scale=scale,
+        initial_state=h0,
+        output_final_state=True,
+        chunk_size=C,
     )
 
     _, _, _, ht_fwd, o_fwd = cpu_chunk_gla_fwd(
-        q.float(), k.float(), v.float(), gk.float(),
-        g_cumsum=None, scale=scale,
+        q.float(),
+        k.float(),
+        v.float(),
+        gk.float(),
+        g_cumsum=None,
+        scale=scale,
         initial_state=h0,
-        output_final_state=True, chunk_size=C,
+        output_final_state=True,
+        chunk_size=C,
     )
 
     ok = compare_tensor("output", o_fwd, o_ref.float(), atol=1e-5, rtol=1e-5)
@@ -1117,6 +1390,7 @@ def test_cpu_chunk_gla_fwd() -> bool:
 
 
 # --- F6: fused_recurrent_gla ---
+
 
 def test_cpu_fused_recurrent_gla() -> bool:
     """New fused_recurrent_gla vs naive_recurrent_gla."""
@@ -1131,24 +1405,32 @@ def test_cpu_fused_recurrent_gla() -> bool:
     h0 = torch.randn(B, H, K, V) * 0.01
 
     o_naive, ht_naive = cpu_naive_recurrent_gla(
-        q, k, v, gk,
+        q,
+        k,
+        v,
+        gk,
         initial_state=h0,
         output_final_state=True,
     )
 
     o_fused, ht_fused = cpu_fused_recurrent_gla(
-        q, k, v,
+        q,
+        k,
+        v,
         gk=gk,
         initial_state=h0,
         output_final_state=True,
     )
 
-    ok = compare_tensor("output", o_fused.float(), o_naive.float(), atol=1e-5, rtol=1e-5)
+    ok = compare_tensor(
+        "output", o_fused.float(), o_naive.float(), atol=1e-5, rtol=1e-5
+    )
     ok &= compare_tensor("final state", ht_fused, ht_naive, atol=1e-5, rtol=1e-5)
     return ok
 
 
 # --- F7: Sub-functions compose ---
+
 
 def test_cpu_sub_functions_compose() -> bool:
     """Manual composition of 4 sub-functions == chunk_gla."""
@@ -1156,7 +1438,7 @@ def test_cpu_sub_functions_compose() -> bool:
     torch.manual_seed(42)
     B, T, H, K, V = 2, 48, 4, 16, 32
     C = 16
-    scale = K ** -0.5
+    scale = K**-0.5
 
     q = torch.randn(B, T, H, K).float()
     k = torch.randn(B, T, H, K).float()
@@ -1165,14 +1447,15 @@ def test_cpu_sub_functions_compose() -> bool:
     h0 = torch.randn(B, H, K, V).float() * 0.01
 
     # Reference
-    o_ref, ht_ref = cpu_chunk_gla(q, k, v, g, scale=scale,
-                                   initial_state=h0, output_final_state=True,
-                                   chunk_size=C)
+    o_ref, ht_ref = cpu_chunk_gla(
+        q, k, v, g, scale=scale, initial_state=h0, output_final_state=True, chunk_size=C
+    )
 
     # Manual composition (T=48 is already a multiple of C=16, no padding needed)
     g_cumsum = cpu_chunk_local_cumsum(g, C)
-    h_all, ht = cpu_chunk_fwd_h(k, v, g_cumsum, h0=h0,
-                                 output_final_state=True, chunk_size=C)
+    h_all, ht = cpu_chunk_fwd_h(
+        k, v, g_cumsum, h0=h0, output_final_state=True, chunk_size=C
+    )
     A = cpu_chunk_gla_fwd_intra_gk(q, k, g_cumsum, scale, chunk_size=C)
     o = cpu_chunk_gla_fwd_o_gk(q, v, g_cumsum, A, h_all, scale, chunk_size=C)
 
@@ -1184,6 +1467,7 @@ def test_cpu_sub_functions_compose() -> bool:
 # =============================================================================
 # Main
 # =============================================================================
+
 
 def main() -> bool:
     print("=" * 70)
@@ -1262,9 +1546,9 @@ def main() -> bool:
             if fn():
                 passed += 1
             else:
-                print(f"  >>> FAILED")
+                print("  >>> FAILED")
         except Exception:
-            print(f"  [FAIL] Exception:")
+            print("  [FAIL] Exception:")
             traceback.print_exc()
 
     print(f"\n{'=' * 70}")
@@ -1277,5 +1561,5 @@ def main() -> bool:
     return passed == total
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     exit(0 if main() else 1)

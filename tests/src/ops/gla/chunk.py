@@ -6,6 +6,7 @@ import torch.nn.functional as F
 # Sub-function 1: chunk_local_cumsum
 # =============================================================================
 
+
 def chunk_local_cumsum(
     g: torch.Tensor,
     chunk_size: int,
@@ -33,6 +34,7 @@ def chunk_local_cumsum(
 # =============================================================================
 # Sub-function 2: chunk_fwd_h
 # =============================================================================
+
 
 def chunk_fwd_h(
     k: torch.Tensor,
@@ -80,18 +82,18 @@ def chunk_fwd_h(
     for i in range(NT):
         h_list.append(h.clone())
 
-        gc = gk_c[:, i]        # [B, C, H, K]
-        ki = k_c[:, i]         # [B, C, H, K]
-        vi = v_c[:, i]         # [B, C, H, V]
+        gc = gk_c[:, i]  # [B, C, H, K]
+        ki = k_c[:, i]  # [B, C, H, K]
+        vi = v_c[:, i]  # [B, C, H, V]
 
-        g_total = gc[:, -1]    # [B, H, K]
+        g_total = gc[:, -1]  # [B, H, K]
 
         # h = h * exp(g_total) + Σ_j k_j * exp(g_total - gc_j) ⊗ v_j
         h = h * g_total.unsqueeze(-1).exp()
-        k_state = ki * (g_total.unsqueeze(1) - gc).exp()    # [B, C, H, K]
-        h = h + torch.einsum('bchk,bchv->bhkv', k_state, vi)
+        k_state = ki * (g_total.unsqueeze(1) - gc).exp()  # [B, C, H, K]
+        h = h + torch.einsum("bchk,bchv->bhkv", k_state, vi)
 
-    h_all = torch.stack(h_list, dim=1)    # [B, NT, H, K, V]
+    h_all = torch.stack(h_list, dim=1)  # [B, NT, H, K, V]
     ht = h if output_final_state else None
     return h_all, ht
 
@@ -99,6 +101,7 @@ def chunk_fwd_h(
 # =============================================================================
 # Sub-function 3: chunk_gla_fwd_intra_gk
 # =============================================================================
+
 
 def chunk_gla_fwd_intra_gk(
     q: torch.Tensor,
@@ -131,20 +134,22 @@ def chunk_gla_fwd_intra_gk(
     k_c = k.view(B, NT, C, H, K)
     g_c = g.view(B, NT, C, H, K)
 
-    q_gated = q_c * g_c.exp()        # [B, NT, C, H, K]
-    k_gated = k_c * (-g_c).exp()     # [B, NT, C, H, K]
+    q_gated = q_c * g_c.exp()  # [B, NT, C, H, K]
+    k_gated = k_c * (-g_c).exp()  # [B, NT, C, H, K]
 
     # A[b,n,h,i,j] = scale * Σ_k q_gated[b,n,i,h,k] * k_gated[b,n,j,h,k]
-    A = torch.einsum('bnihk,bnjhk->bnhij', q_gated, k_gated) * scale  # [B, NT, H, C, C]
+    A = torch.einsum("bnihk,bnjhk->bnhij", q_gated, k_gated) * scale  # [B, NT, H, C, C]
 
     causal_mask = torch.tril(torch.ones(C, C, device=q.device, dtype=torch.bool))
     A = A.masked_fill(~causal_mask, 0.0)
 
     return A
 
+
 # =============================================================================
 # Sub-function 4: chunk_gla_fwd_o_gk
 # =============================================================================
+
 
 def chunk_gla_fwd_o_gk(
     q: torch.Tensor,
@@ -205,16 +210,16 @@ def chunk_gla_fwd_o_gk(
                 v_seg = F.pad(v_seg, (0, 0, 0, 0, 0, pad))
                 g_seg = F.pad(g_seg, (0, 0, 0, 0, 0, pad))
 
-            A_seg = A[:, chunk_offset:chunk_offset + NT_seg]
-            h_seg = h[:, chunk_offset:chunk_offset + NT_seg]
+            A_seg = A[:, chunk_offset : chunk_offset + NT_seg]
+            h_seg = h[:, chunk_offset : chunk_offset + NT_seg]
 
             q_c = q_seg.view(B, NT_seg, C, H, K)
             v_c = v_seg.view(B, NT_seg, C, H, V)
             g_c = g_seg.view(B, NT_seg, C, H, K)
 
             q_gated = q_c * g_c.exp()
-            o_inter = scale * torch.einsum('bnchk,bnhkv->bnchv', q_gated, h_seg)
-            o_intra = torch.einsum('bnhij,bnjhv->bnihv', A_seg, v_c)
+            o_inter = scale * torch.einsum("bnchk,bnhkv->bnchv", q_gated, h_seg)
+            o_intra = torch.einsum("bnhij,bnjhv->bnihv", A_seg, v_c)
 
             o_seg = (o_inter + o_intra).reshape(B, T_padded, H, V)
             o[:, bos:eos] = o_seg[:, :seg_len]
@@ -227,13 +232,13 @@ def chunk_gla_fwd_o_gk(
     v_c = v.view(B, NT, C, H, V)
     g_c = g.view(B, NT, C, H, K)
 
-    q_gated = q_c * g_c.exp()    # [B, NT, C, H, K]
+    q_gated = q_c * g_c.exp()  # [B, NT, C, H, K]
 
     # Inter-chunk: o_inter = scale * q_gated @ h
-    o_inter = scale * torch.einsum('bnchk,bnhkv->bnchv', q_gated, h)  # [B, NT, C, H, V]
+    o_inter = scale * torch.einsum("bnchk,bnhkv->bnchv", q_gated, h)  # [B, NT, C, H, V]
 
     # Intra-chunk: o_intra = A @ v  (A already contains scale)
-    o_intra = torch.einsum('bnhij,bnjhv->bnihv', A, v_c)      # [B, NT, C, H, V]
+    o_intra = torch.einsum("bnhij,bnjhv->bnihv", A, v_c)  # [B, NT, C, H, V]
 
     o = (o_inter + o_intra).reshape(B, T, H, V)
     return o
@@ -242,6 +247,7 @@ def chunk_gla_fwd_o_gk(
 # =============================================================================
 # Orchestrator: chunk_gla_fwd
 # =============================================================================
+
 
 def chunk_gla_fwd(
     q: torch.Tensor,
@@ -293,7 +299,9 @@ def chunk_gla_fwd(
         g_cumsum = chunk_local_cumsum(g, C)
 
     h, ht = chunk_fwd_h(
-        k, v, g_cumsum,
+        k,
+        v,
+        g_cumsum,
         h0=initial_state,
         output_final_state=output_final_state,
         chunk_size=C,
@@ -308,6 +316,7 @@ def chunk_gla_fwd(
 # =============================================================================
 # Public API: chunk_gla
 # =============================================================================
+
 
 def chunk_gla(
     q: torch.Tensor,
@@ -349,37 +358,44 @@ def chunk_gla(
     B, T, H, K = q.shape
 
     if scale is None:
-        scale = K ** -0.5
+        scale = K**-0.5
 
     if cu_seqlens is not None:
         assert B == 1, "cu_seqlens requires B=1"
         N = len(cu_seqlens) - 1
-        o = torch.zeros_like(v)   # [1, T, H, V]
+        o = torch.zeros_like(v)  # [1, T, H, V]
         final_states = [] if output_final_state else None
 
         for i in range(N):
             bos = cu_seqlens[i].item()
             eos = cu_seqlens[i + 1].item()
-            h0 = initial_state[i:i + 1] if initial_state is not None else None
+            h0 = initial_state[i : i + 1] if initial_state is not None else None
 
             _, _, _, ht_seg, o_seg = chunk_gla_fwd(
-                q[:, bos:eos], k[:, bos:eos],
-                v[:, bos:eos], g[:, bos:eos],
-                g_cumsum=None, scale=scale,
+                q[:, bos:eos],
+                k[:, bos:eos],
+                v[:, bos:eos],
+                g[:, bos:eos],
+                g_cumsum=None,
+                scale=scale,
                 initial_state=h0,
                 output_final_state=output_final_state,
                 chunk_size=chunk_size,
             )
             o[:, bos:eos] = o_seg
             if output_final_state:
-                final_states.append(ht_seg.squeeze(0))   # [H, K, V]
+                final_states.append(ht_seg.squeeze(0))  # [H, K, V]
 
         final_state = torch.stack(final_states, dim=0) if output_final_state else None
         return o.to(dtype), final_state
     else:
         _, _, _, ht, o = chunk_gla_fwd(
-            q, k, v, g,
-            g_cumsum=None, scale=scale,
+            q,
+            k,
+            v,
+            g,
+            g_cumsum=None,
+            scale=scale,
             initial_state=initial_state,
             output_final_state=output_final_state,
             chunk_size=chunk_size,

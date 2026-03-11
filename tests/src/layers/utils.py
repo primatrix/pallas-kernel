@@ -1,11 +1,12 @@
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange, repeat
+
 
 def prepare_lens_from_mask(mask: torch.BoolTensor) -> torch.LongTensor:
     """Calculate the lengths of each sequence from the attention mask."""
     return mask.sum(dim=-1, dtype=torch.int32)
+
 
 def prepare_cu_seqlens_from_mask(
     mask: torch.BoolTensor,
@@ -16,9 +17,10 @@ def prepare_cu_seqlens_from_mask(
     return F.pad(lens.cumsum(dim=0, dtype=dtype), (1, 0))
 
 
-
 def index_put_first_axis(
-    x: torch.Tensor, indices: torch.Tensor, first_axis_dim: int,
+    x: torch.Tensor,
+    indices: torch.Tensor,
+    first_axis_dim: int,
 ) -> torch.Tensor:
     """Put compact tensor back to specified positions in flattened first dimension.
 
@@ -30,7 +32,6 @@ def index_put_first_axis(
     y = torch.zeros(first_axis_dim, *x.shape[1:], device=x.device, dtype=x.dtype)
     y[indices] = x
     return y
-
 
 
 def get_unpad_data(
@@ -52,6 +53,7 @@ def get_unpad_data(
     cu_seqlens = prepare_cu_seqlens_from_mask(attention_mask)
     return indices, cu_seqlens, max_seqlen_in_batch
 
+
 def index_first_axis(x: torch.Tensor, indices: torch.Tensor) -> torch.Tensor:
     """Select elements from flattened first dimension using specified indices.
 
@@ -62,9 +64,11 @@ def index_first_axis(x: torch.Tensor, indices: torch.Tensor) -> torch.Tensor:
     other_shape = x.shape[1:]
     second_dim = other_shape.numel()
     return torch.gather(
-        rearrange(x, 'b ... -> b (...)'), 0,
-        repeat(indices, 'z -> z d', d=second_dim),
+        rearrange(x, "b ... -> b (...)"),
+        0,
+        repeat(indices, "z -> z d", d=second_dim),
     ).reshape(-1, *other_shape)
+
 
 def pad_input(
     hidden_states: torch.Tensor,
@@ -74,4 +78,4 @@ def pad_input(
 ) -> torch.Tensor:
     """Pad compact tensor back into dense tensor of [batch_size, seq_len, ...]."""
     output = index_put_first_axis(hidden_states, indices, batch_size * seq_len)
-    return rearrange(output, '(b s) ... -> b s ...', b=batch_size)
+    return rearrange(output, "(b s) ... -> b s ...", b=batch_size)

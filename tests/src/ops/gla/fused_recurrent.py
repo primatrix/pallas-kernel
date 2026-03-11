@@ -8,6 +8,7 @@ import torch
 
 from tests.src.ops.common.fused_recurrent import fused_recurrent
 
+
 def fused_recurrent_gla(
     q: torch.Tensor,
     k: torch.Tensor,

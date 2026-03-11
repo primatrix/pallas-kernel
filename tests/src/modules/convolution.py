@@ -1,12 +1,13 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from einops import rearrange, repeat
+from einops import rearrange
 
 # =============================================================================
 # ShortConvolution (Replacement for fla.modules.ShortConvolution, pure PyTorch)
 # Causal depthwise separable convolution based on nn.Conv1d
 # =============================================================================
+
 
 class ShortConvolution(nn.Conv1d):
     """Causal depthwise 1D convolution (Pure CPU version).
@@ -21,7 +22,7 @@ class ShortConvolution(nn.Conv1d):
         hidden_size: int,
         kernel_size: int,
         bias: bool = False,
-        activation: str | None = 'silu',
+        activation: str | None = "silu",
         **kwargs,
     ):
         super().__init__(
@@ -36,7 +37,7 @@ class ShortConvolution(nn.Conv1d):
         self.activation = activation
 
     def _apply_activation(self, x: torch.Tensor) -> torch.Tensor:
-        if self.activation in ('silu', 'swish'):
+        if self.activation in ("silu", "swish"):
             return F.silu(x)
         return x
 
@@ -60,21 +61,23 @@ class ShortConvolution(nn.Conv1d):
                 bos = cu_seqlens[i].item()
                 eos = cu_seqlens[i + 1].item()
                 seg = x[:, bos:eos, :]  # [1, seg_len, D]
-                seg = rearrange(seg, 'b t d -> b d t')  # [1, D, seg_len]
+                seg = rearrange(seg, "b t d -> b d t")  # [1, D, seg_len]
                 # Manual left padding
                 seg_padded = F.pad(seg, (W - 1, 0))
-                seg_out = F.conv1d(seg_padded, self.weight, self.bias, groups=self.hidden_size)
-                seg_out = rearrange(seg_out, 'b d t -> b t d')
+                seg_out = F.conv1d(
+                    seg_padded, self.weight, self.bias, groups=self.hidden_size
+                )
+                seg_out = rearrange(seg_out, "b d t -> b t d")
                 segments.append(seg_out)
             y = torch.cat(segments, dim=1)
         else:
             # Standard case: convolution across the entire sequence
-            x_t = rearrange(x, 'b t d -> b d t')
+            x_t = rearrange(x, "b t d -> b d t")
             # nn.Conv1d with padding=kernel_size-1 will pad both sides
             # We need causal convolution, so we handle it manually
             x_padded = F.pad(x_t, (W - 1, 0))
             y = F.conv1d(x_padded, self.weight, self.bias, groups=self.hidden_size)
-            y = rearrange(y, 'b d t -> b t d')
+            y = rearrange(y, "b d t -> b t d")
 
         return self._apply_activation(y)
 
@@ -99,20 +102,22 @@ class ShortConvolution(nn.Conv1d):
             cache = x.new_zeros(N, D, W)
 
         # Get current token
-        x_step = x.squeeze(0) if cu_seqlens is not None else x.squeeze(1)  # [N, D] or [B, D]
+        x_step = (
+            x.squeeze(0) if cu_seqlens is not None else x.squeeze(1)
+        )  # [N, D] or [B, D]
 
         if cache is not None:
             # Roll cache and put new token at the last position
             cache = cache.roll(shifts=-1, dims=-1)
             cache[:, :, -1] = x_step
             # Dot product with convolution weights
-            w = rearrange(self.weight, 'd 1 w -> d w')
+            w = rearrange(self.weight, "d 1 w -> d w")
             y = (cache * w).sum(dim=-1)  # [N, D]
             if self.bias is not None:
                 y = y + self.bias
         else:
             # Case without cache, calculate directly
-            w = rearrange(self.weight, 'd 1 w -> d w')
+            w = rearrange(self.weight, "d 1 w -> d w")
             # Use only the last weight
             y = x_step * w[:, -1]
             if self.bias is not None:
@@ -154,14 +159,14 @@ class ShortConvolution(nn.Conv1d):
                     bos = cu_seqlens[i].item()
                     eos = cu_seqlens[i + 1].item()
                     seg = x[0, bos:eos, :]  # [seg_len, D]
-                    seg_t = rearrange(seg, 't d -> d t')
+                    seg_t = rearrange(seg, "t d -> d t")
                     # Left pad to ensure at least W tokens
                     if seg_t.shape[-1] < W:
                         seg_t = F.pad(seg_t, (W - seg_t.shape[-1], 0))
                     final_states.append(seg_t[:, -W:])  # [D, W]
                 final_state = torch.stack(final_states, dim=0)  # [N, D, W]
             else:
-                x_t = rearrange(x, 'b t d -> b d t')
+                x_t = rearrange(x, "b t d -> b d t")
                 if T < W:
                     x_t = F.pad(x_t, (W - T, 0))
                 final_state = x_t[:, :, -W:]  # [B, D, W]

@@ -8,8 +8,6 @@
 
 from __future__ import annotations
 
-import math
-import warnings
 from typing import Any
 
 import torch
@@ -21,27 +19,38 @@ from tests.src.layers.utils import get_unpad_data, index_first_axis, pad_input
 from tests.src.modules.layernorm import RMSNorm
 from tests.src.modules.fused_norm_gate import FusedRMSNormGated
 from tests.src.modules.convolution import ShortConvolution
-from tests.src.ops.gla import chunk_gla, naive_recurrent_gla, fused_chunk_gla, fused_recurrent_gla
+from tests.src.ops.gla import (
+    chunk_gla,
+    naive_recurrent_gla,
+    fused_chunk_gla,
+    fused_recurrent_gla,
+)
 
-__all__ = ['naive_recurrent_gla', 'chunk_gla', 'fused_chunk_gla', 'GatedLinearAttention']
+__all__ = [
+    "naive_recurrent_gla",
+    "chunk_gla",
+    "fused_chunk_gla",
+    "GatedLinearAttention",
+]
 
 # =============================================================================
 # Activation functions (Replacement for fla.modules.activations.ACT2FN)
 # =============================================================================
 
 ACT2FN = {
-    'relu': F.relu,
-    'sigmoid': torch.sigmoid,
-    'silu': F.silu,
-    'swish': F.silu,
-    'gelu': F.gelu,
-    'tanh': torch.tanh,
+    "relu": F.relu,
+    "sigmoid": torch.sigmoid,
+    "silu": F.silu,
+    "swish": F.silu,
+    "gelu": F.gelu,
+    "tanh": torch.tanh,
 }
 
 # =============================================================================
 # GatedLinearAttention layer (CPU-only version)
 # Fully copied from fla/fla/layers/gla.py, all Triton dependencies replaced with pure PyTorch implementation above
 # =============================================================================
+
 
 class GatedLinearAttention(nn.Module):
     r"""
@@ -94,7 +103,7 @@ class GatedLinearAttention(nn.Module):
 
     def __init__(
         self,
-        mode: str = 'chunk',
+        mode: str = "chunk",
         hidden_size: int = 1024,
         expand_k: float = 0.5,
         expand_v: float = 1.0,
@@ -105,7 +114,7 @@ class GatedLinearAttention(nn.Module):
         conv_size: int = 4,
         conv_bias: bool = False,
         use_output_gate: bool = True,
-        gate_fn: str = 'swish',
+        gate_fn: str = "swish",
         elementwise_affine: bool | None = True,
         norm_eps: float = 1e-5,
         gate_logit_normalizer: int = 16,
@@ -137,9 +146,15 @@ class GatedLinearAttention(nn.Module):
         self.clamp_min = clamp_min
         self.layer_idx = layer_idx
 
-        assert mode in ['chunk', 'fused_recurrent', 'fused_chunk'], f"Not supported mode `{mode}`."
-        assert self.key_dim % num_heads == 0, f"key dim must be divisible by num_heads of {num_heads}"
-        assert self.value_dim % num_heads == 0, f"value dim must be divisible by num_heads of {num_heads}"
+        assert mode in ["chunk", "fused_recurrent", "fused_chunk"], (
+            f"Not supported mode `{mode}`."
+        )
+        assert self.key_dim % num_heads == 0, (
+            f"key dim must be divisible by num_heads of {num_heads}"
+        )
+        assert self.value_dim % num_heads == 0, (
+            f"value dim must be divisible by num_heads of {num_heads}"
+        )
 
         self.head_k_dim = self.key_dim // num_heads
         self.head_v_dim = self.value_dim // num_heads
@@ -157,19 +172,19 @@ class GatedLinearAttention(nn.Module):
                 hidden_size=self.key_dim,
                 kernel_size=conv_size,
                 bias=conv_bias,
-                activation='silu',
+                activation="silu",
             )
             self.k_conv1d = ShortConvolution(
                 hidden_size=self.key_dim_per_group,
                 kernel_size=conv_size,
                 bias=conv_bias,
-                activation='silu',
+                activation="silu",
             )
             self.v_conv1d = ShortConvolution(
                 hidden_size=self.value_dim_per_group,
                 kernel_size=conv_size,
                 bias=conv_bias,
-                activation='silu',
+                activation="silu",
             )
 
         self.gk_proj = nn.Sequential(
@@ -178,7 +193,7 @@ class GatedLinearAttention(nn.Module):
         )
         self.o_proj = nn.Linear(self.value_dim, hidden_size, bias=False)
 
-        if gate_fn == 'swish' and fuse_norm and use_output_gate:
+        if gate_fn == "swish" and fuse_norm and use_output_gate:
             self.g_norm_swish_gate = FusedRMSNormGated(
                 hidden_size=self.head_v_dim,
                 elementwise_affine=elementwise_affine,
@@ -223,27 +238,27 @@ class GatedLinearAttention(nn.Module):
                 "Arbitrary attention masks of shape [batch_size, seq_len, seq_len] are not allowed."
             )
 
-        batch_size, q_len, _ = hidden_states.shape    # hidden_states: [B, T, D]
+        batch_size, q_len, _ = hidden_states.shape  # hidden_states: [B, T, D]
         # For short sequences use fused_recurrent (here both mapped to the same naive implementation)
-        mode = 'fused_recurrent' if hidden_states.shape[1] <= 64 else self.mode
+        mode = "fused_recurrent" if hidden_states.shape[1] <= 64 else self.mode
 
         last_state = None
         if past_key_values is not None and len(past_key_values) > self.layer_idx:
             last_state = past_key_values[self.layer_idx]
 
-        cu_seqlens = kwargs.get('cu_seqlens')
+        cu_seqlens = kwargs.get("cu_seqlens")
         if attention_mask is not None:
             # attention_mask: [B, T]  →  indices, cu_seqlens: [N+1]
             indices, cu_seqlens, _ = get_unpad_data(attention_mask[:, -q_len:])
             # hidden_states: [B, T, D] → unpad → [1, T_packed, D]
             hidden_states = index_first_axis(
-                rearrange(hidden_states, 'b s ... -> (b s) ...'), indices
+                rearrange(hidden_states, "b s ... -> (b s) ..."), indices
             ).unsqueeze(0)
 
         if self.use_short_conv:
             conv_state_q, conv_state_k, conv_state_v = None, None, None
             if last_state is not None:
-                conv_state_q, conv_state_k, conv_state_v = last_state['conv_state']
+                conv_state_q, conv_state_k, conv_state_v = last_state["conv_state"]
             # q_proj: [B, T, D] → [B, T, key_dim]  then  q_conv1d: [B, T, key_dim] → [B, T, key_dim]
             q, conv_state_q = self.q_conv1d(
                 x=self.q_proj(hidden_states),
@@ -266,29 +281,38 @@ class GatedLinearAttention(nn.Module):
                 cu_seqlens=cu_seqlens,
             )
         else:
-            q = self.q_proj(hidden_states)      # [B, T, D] → [B, T, key_dim]
-            k = self.k_proj(hidden_states)      # [B, T, D] → [B, T, key_dim_per_group]
-            v = self.v_proj(hidden_states)      # [B, T, D] → [B, T, value_dim_per_group]
+            q = self.q_proj(hidden_states)  # [B, T, D] → [B, T, key_dim]
+            k = self.k_proj(hidden_states)  # [B, T, D] → [B, T, key_dim_per_group]
+            v = self.v_proj(hidden_states)  # [B, T, D] → [B, T, value_dim_per_group]
         # gk_proj: [B, T, D] → gk_proj.0 → [B, T, R] → gk_proj.1 → [B, T, key_dim_per_group]
         gk = self.gk_proj(hidden_states)
 
         # q: [B, T, key_dim] → [B, T, H, K]
-        q = rearrange(q, '... (h d) -> ... h d', d=self.head_k_dim)
+        q = rearrange(q, "... (h d) -> ... h d", d=self.head_k_dim)
         if self.num_kv_groups > 1:
             # MQA: k,gk: [B, T, key_dim_per_group] → repeat → [B, T, H, K]
             #       v:   [B, T, value_dim_per_group] → repeat → [B, T, H, V]
             k, gk = (
-                repeat(x, '... (h d) -> ... (h g) d', g=self.num_kv_groups, d=self.head_k_dim)
+                repeat(
+                    x,
+                    "... (h d) -> ... (h g) d",
+                    g=self.num_kv_groups,
+                    d=self.head_k_dim,
+                )
                 for x in (k, gk)
             )
-            v = repeat(v, '... (h d) -> ... (h g) d', g=self.num_kv_groups, d=self.head_v_dim)
+            v = repeat(
+                v, "... (h d) -> ... (h g) d", g=self.num_kv_groups, d=self.head_v_dim
+            )
         else:
             # k,gk: [B, T, key_dim_per_group] → [B, T, H_kv, K]  (H_kv == H when G==1)
             # v:    [B, T, value_dim_per_group] → [B, T, H_kv, V]
-            k, gk = (rearrange(x, '... (h d) -> ... h d', d=self.head_k_dim) for x in (k, gk))
-            v = rearrange(v, '... (h d) -> ... h d', d=self.head_v_dim)
+            k, gk = (
+                rearrange(x, "... (h d) -> ... h d", d=self.head_k_dim) for x in (k, gk)
+            )
+            v = rearrange(v, "... (h d) -> ... h d", d=self.head_v_dim)
 
-        gk = F.logsigmoid(gk) / self.gate_logit_normalizer   # [B, T, H, K]
+        gk = F.logsigmoid(gk) / self.gate_logit_normalizer  # [B, T, H, K]
         if self.clamp_min is not None:
             gk = torch.clamp_min(gk, self.clamp_min)
 
@@ -296,8 +320,10 @@ class GatedLinearAttention(nn.Module):
             q, k = map(self.feature_map_fn, (q, k))
 
         # recurrent_state (initial_state): [B, H, K, V] or None
-        recurrent_state = last_state['recurrent_state'] if last_state is not None else None
-        if mode == 'fused_recurrent':
+        recurrent_state = (
+            last_state["recurrent_state"] if last_state is not None else None
+        )
+        if mode == "fused_recurrent":
             # q: [B, T, H, K], k: [B, T, H, K], v: [B, T, H, V], gk: [B, T, H, K]
             # → o: [B, T, H, V], recurrent_state: [B, H, K, V]
             o, recurrent_state = fused_recurrent_gla(
@@ -309,7 +335,7 @@ class GatedLinearAttention(nn.Module):
                 output_final_state=use_cache,
                 cu_seqlens=cu_seqlens,
             )
-        elif mode == 'fused_chunk':
+        elif mode == "fused_chunk":
             # q: [B, T, H, K], k: [B, T, H, K], v: [B, T, H, V], g: [B, T, H, K]
             # → o: [B, T, H, V], recurrent_state: [B, H, K, V]
             o, recurrent_state = fused_chunk_gla(
@@ -321,7 +347,7 @@ class GatedLinearAttention(nn.Module):
                 output_final_state=use_cache,
                 cu_seqlens=cu_seqlens,
             )
-        elif mode == 'chunk':
+        elif mode == "chunk":
             # q: [B, T, H, K], k: [B, T, H, K], v: [B, T, H, V], g: [B, T, H, K]
             # → o: [B, T, H, V], recurrent_state: [B, H, K, V]
             o, recurrent_state = chunk_gla(
@@ -339,27 +365,33 @@ class GatedLinearAttention(nn.Module):
         if past_key_values is not None:
             past_key_values.update(
                 recurrent_state=recurrent_state,
-                conv_state=(conv_state_q, conv_state_k, conv_state_v) if self.use_short_conv else None,
+                conv_state=(conv_state_q, conv_state_k, conv_state_v)
+                if self.use_short_conv
+                else None,
                 layer_idx=self.layer_idx,
                 offset=q_len,
             )
 
         if self.use_output_gate:
-            g = self.g_proj(hidden_states)    # [B, T, D] → [B, T, value_dim]
+            g = self.g_proj(hidden_states)  # [B, T, D] → [B, T, value_dim]
             if self.fuse_norm_and_gate:
-                g = rearrange(g, '... (h d) -> ... h d', d=self.head_v_dim)  # [B, T, H, V]
+                g = rearrange(
+                    g, "... (h d) -> ... h d", d=self.head_v_dim
+                )  # [B, T, H, V]
                 # g_norm_swish_gate: o=[B, T, H, V], g=[B, T, H, V] → [B, T, H, V]
                 o = self.g_norm_swish_gate(o, g)
-                o = rearrange(o, '... h d -> ... (h d)')  # [B, T, value_dim]
+                o = rearrange(o, "... h d -> ... (h d)")  # [B, T, value_dim]
             else:
                 # g_norm: [B, T, H, V] → [B, T, H, V]  then rearrange → [B, T, value_dim]
-                o = rearrange(self.g_norm(o), '... h d -> ... (h d)')
-                o = o * self.gate_fn(g)    # [B, T, value_dim]
+                o = rearrange(self.g_norm(o), "... h d -> ... (h d)")
+                o = o * self.gate_fn(g)  # [B, T, value_dim]
         else:
             # g_norm: [B, T, H, V] → [B, T, H, V]  then rearrange → [B, T, value_dim]
-            o = rearrange(self.g_norm(o), '... h d -> ... (h d)')
-        o = self.o_proj(o)                   # [B, T, value_dim] → [B, T, D]
+            o = rearrange(self.g_norm(o), "... h d -> ... (h d)")
+        o = self.o_proj(o)  # [B, T, value_dim] → [B, T, D]
         if attention_mask is not None:
-            o = pad_input(o.squeeze(0), indices, batch_size, q_len)  # [1, T_packed, D] → [B, T, D]
+            o = pad_input(
+                o.squeeze(0), indices, batch_size, q_len
+            )  # [1, T_packed, D] → [B, T, D]
 
         return o, None, past_key_values
