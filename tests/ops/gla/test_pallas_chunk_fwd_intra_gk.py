@@ -10,6 +10,7 @@ Both compute the full (non-causal) intra-chunk attention matrix:
 CPU returns [B, NT, C_i, H, C_j] -> reshaped to [B, T, H, C].
 Pallas returns [B, T, H, BT].
 """
+
 from __future__ import annotations
 import sys
 from pathlib import Path
@@ -32,64 +33,65 @@ from tests.utils import compare_tensor
 
 CASES = [
     # -- standard shapes --
-    dict(B=2, T=64,  H=4, K=32,  seed=42),
-    dict(B=1, T=128, H=2, K=64,  seed=7),
+    dict(B=2, T=64, H=4, K=32, seed=42),
+    dict(B=1, T=128, H=2, K=64, seed=7),
     # -- single head --
-    dict(B=2, T=64,  H=1, K=32,  seed=10),
+    dict(B=2, T=64, H=1, K=32, seed=10),
     # -- K variations --
-    dict(B=2, T=64,  H=4, K=16,  seed=20),
-    dict(B=2, T=64,  H=4, K=128, seed=21),
+    dict(B=2, T=64, H=4, K=16, seed=20),
+    dict(B=2, T=64, H=4, K=128, seed=21),
     # -- small T (= chunk_size) --
-    dict(B=1, T=64,  H=2, K=32,  seed=30),
+    dict(B=1, T=64, H=2, K=32, seed=30),
     # -- T = 2 * chunk_size --
-    dict(B=2, T=128, H=4, K=16,  seed=40),
+    dict(B=2, T=128, H=4, K=16, seed=40),
     # -- large batch --
-    dict(B=8, T=64,  H=4, K=32,  seed=50),
+    dict(B=8, T=64, H=4, K=32, seed=50),
     # -- many heads --
-    dict(B=1, T=64,  H=16, K=32, seed=60),
+    dict(B=1, T=64, H=16, K=32, seed=60),
     # -- small dims --
-    dict(B=2, T=64,  H=2, K=8,   seed=70),
+    dict(B=2, T=64, H=2, K=8, seed=70),
     # -- various --
-    dict(B=1, T=64,  H=1, K=16,  seed=99),
-    dict(B=4, T=64,  H=8, K=32,  seed=99),
-    dict(B=2, T=128, H=4, K=32,  seed=99),
+    dict(B=1, T=64, H=1, K=16, seed=99),
+    dict(B=4, T=64, H=8, K=32, seed=99),
+    dict(B=2, T=128, H=4, K=32, seed=99),
     # -- custom scale --
-    dict(B=2, T=64,  H=4, K=32,  seed=200, scale=0.1),
+    dict(B=2, T=64, H=4, K=32, seed=200, scale=0.1),
     # -- smaller chunk_size --
-    dict(B=2, T=64,  H=4, K=32,  seed=210, chunk_size=16),
-    dict(B=2, T=128, H=4, K=32,  seed=211, chunk_size=32),
-    dict(B=1, T=128, H=2, K=64,  seed=212, chunk_size=16),
+    dict(B=2, T=64, H=4, K=32, seed=210, chunk_size=16),
+    dict(B=2, T=128, H=4, K=32, seed=211, chunk_size=32),
+    dict(B=1, T=128, H=2, K=64, seed=212, chunk_size=16),
     # -- long sequence --
-    dict(B=1, T=256,  H=2, K=32, seed=300),
-    dict(B=1, T=512,  H=2, K=32, seed=301),
+    dict(B=1, T=256, H=2, K=32, seed=300),
+    dict(B=1, T=512, H=2, K=32, seed=301),
     dict(B=1, T=1024, H=2, K=32, seed=302),
     # -- long + large K --
-    dict(B=1, T=256, H=2, K=64,  seed=350),
+    dict(B=1, T=256, H=2, K=64, seed=350),
     dict(B=1, T=256, H=2, K=128, seed=351),
     # -- long + multi-batch --
-    dict(B=4, T=256, H=2, K=32,  seed=360),
-    dict(B=2, T=512, H=4, K=32,  seed=361),
+    dict(B=4, T=256, H=2, K=32, seed=360),
+    dict(B=2, T=512, H=4, K=32, seed=361),
     # -- long + many heads --
-    dict(B=1, T=256, H=8, K=32,  seed=370),
+    dict(B=1, T=256, H=8, K=32, seed=370),
     # -- long + combo --
-    dict(B=1, T=256, H=4, K=32,  seed=380, scale=0.1),
-    dict(B=2, T=256, H=4, K=32,  seed=381, chunk_size=32),
+    dict(B=1, T=256, H=4, K=32, seed=380, scale=0.1),
+    dict(B=2, T=256, H=4, K=32, seed=381, chunk_size=32),
 ]
 
 
 def _case_id(c):
     parts = [f"B{c['B']}_T{c['T']}_H{c['H']}_K{c['K']}"]
-    cs = c.get('chunk_size', 64)
+    cs = c.get("chunk_size", 64)
     if cs != 64:
         parts.append(f"C{cs}")
-    if c.get('scale') is not None:
+    if c.get("scale") is not None:
         parts.append(f"scale={c['scale']}")
-    return '-'.join(parts)
+    return "-".join(parts)
 
 
 # ============================================================================
 # Helpers
 # ============================================================================
+
 
 def _torch_to_jax(t: torch.Tensor) -> jax.Array:
     return jnp.array(t.detach().to(torch.float32).numpy())
@@ -107,18 +109,19 @@ def _make_inputs(B, T, H, K):
 # Non-varlen test: Pallas TPU vs Torch CPU
 # ============================================================================
 
+
 @pytest.mark.parametrize("cfg", CASES, ids=[_case_id(c) for c in CASES])
 def test_pallas_vs_cpu(cfg):
-    B, T, H, K = cfg['B'], cfg['T'], cfg['H'], cfg['K']
-    atol = cfg.get('atol', 1e-5)
-    rtol = cfg.get('rtol', 1e-5)
-    scale = cfg.get('scale', K ** -0.5)
-    chunk_size = cfg.get('chunk_size', 64)
+    B, T, H, K = cfg["B"], cfg["T"], cfg["H"], cfg["K"]
+    atol = cfg.get("atol", 1e-5)
+    rtol = cfg.get("rtol", 1e-5)
+    scale = cfg.get("scale", K**-0.5)
+    chunk_size = cfg.get("chunk_size", 64)
     C = chunk_size
 
     assert T % C == 0, f"T={T} must be a multiple of chunk_size={C}"
 
-    torch.manual_seed(cfg['seed'])
+    torch.manual_seed(cfg["seed"])
     q, k, g = _make_inputs(B, T, H, K)
 
     # CPU: returns [B, NT, C_i, H, C_j]
@@ -128,8 +131,11 @@ def test_pallas_vs_cpu(cfg):
 
     # Pallas TPU: returns [B, T, H, BT]
     A_pallas = pallas_chunk_gla_fwd_intra_gk(
-        _torch_to_jax(q), _torch_to_jax(k), _torch_to_jax(g),
-        scale=scale, chunk_size=C,
+        _torch_to_jax(q),
+        _torch_to_jax(k),
+        _torch_to_jax(g),
+        scale=scale,
+        chunk_size=C,
     )
 
     assert compare_tensor("A_intra", A_cpu_flat, A_pallas, atol=atol, rtol=rtol)
@@ -170,14 +176,14 @@ VARLEN_CASES = [
 
 
 def _varlen_case_id(c):
-    seqlens_str = ','.join(str(s) for s in c['seqlens'])
+    seqlens_str = ",".join(str(s) for s in c["seqlens"])
     parts = [f"seqlens=[{seqlens_str}]_H{c['H']}_K{c['K']}"]
-    cs = c.get('chunk_size', 64)
+    cs = c.get("chunk_size", 64)
     if cs != 64:
         parts.append(f"C{cs}")
-    if c.get('scale') is not None:
+    if c.get("scale") is not None:
         parts.append(f"scale={c['scale']}")
-    return '-'.join(parts)
+    return "-".join(parts)
 
 
 def _make_segment_inputs_intra(B, L, H, K, chunk_size, scale):
@@ -214,28 +220,30 @@ def _make_segment_inputs_intra(B, L, H, K, chunk_size, scale):
 # Varlen test: Pallas varlen path vs per-segment CPU computation
 # ============================================================================
 
-@pytest.mark.parametrize("cfg", VARLEN_CASES, ids=[_varlen_case_id(c) for c in VARLEN_CASES])
+
+@pytest.mark.parametrize(
+    "cfg", VARLEN_CASES, ids=[_varlen_case_id(c) for c in VARLEN_CASES]
+)
 def test_pallas_varlen_vs_segments(cfg):
     """Test that Pallas varlen path matches per-segment CPU computation."""
-    seqlens = cfg['seqlens']
-    H, K = cfg['H'], cfg['K']
-    C = cfg.get('chunk_size', 64)
-    scale = cfg.get('scale', K ** -0.5)
-    atol = cfg.get('atol', 1e-5)
-    rtol = cfg.get('rtol', 1e-5)
+    seqlens = cfg["seqlens"]
+    H, K = cfg["H"], cfg["K"]
+    C = cfg.get("chunk_size", 64)
+    scale = cfg.get("scale", K**-0.5)
+    atol = cfg.get("atol", 1e-5)
+    rtol = cfg.get("rtol", 1e-5)
     B = 1
 
     # Only test chunk-aligned seqlens (unified kernel requires alignment)
     for L in seqlens:
         assert L % C == 0, f"seqlen {L} not aligned to chunk_size {C}"
 
-    torch.manual_seed(cfg['seed'])
+    torch.manual_seed(cfg["seed"])
 
     qs, ks, gs, A_refs = [], [], [], []
 
     for L in seqlens:
-        q_raw, k_raw, g_raw, A_ref = \
-            _make_segment_inputs_intra(B, L, H, K, C, scale)
+        q_raw, k_raw, g_raw, A_ref = _make_segment_inputs_intra(B, L, H, K, C, scale)
         qs.append(q_raw)
         ks.append(k_raw)
         gs.append(g_raw)
@@ -249,11 +257,16 @@ def test_pallas_varlen_vs_segments(cfg):
 
     # Run Pallas on packed inputs
     A_pallas = pallas_chunk_gla_fwd_intra_gk(
-        _torch_to_jax(q_packed), _torch_to_jax(k_packed), _torch_to_jax(g_packed),
-        scale=scale, chunk_size=C,
+        _torch_to_jax(q_packed),
+        _torch_to_jax(k_packed),
+        _torch_to_jax(g_packed),
+        scale=scale,
+        chunk_size=C,
     )
 
-    assert compare_tensor("A_intra_varlen", A_ref_packed, A_pallas, atol=atol, rtol=rtol)
+    assert compare_tensor(
+        "A_intra_varlen", A_ref_packed, A_pallas, atol=atol, rtol=rtol
+    )
 
 
 if __name__ == "__main__":

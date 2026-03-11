@@ -1,7 +1,7 @@
 from .naive import naive_recurrent_gla
 from .chunk import (
     chunk_gla,
-    chunk_local_cumsum_ref as chunk_local_cumsum,
+    chunk_local_cumsum_vector as chunk_local_cumsum,
     chunk_fwd_h_ref as chunk_fwd_h,
     chunk_gla_fwd_intra_gk,
     chunk_gla_fwd_o_gk,

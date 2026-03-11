@@ -119,11 +119,11 @@ def _make_inputs(B, T, H, K, V, chunk_size, scale):
 
 @pytest.mark.parametrize("cfg", CASES, ids=[_case_id(c) for c in CASES])
 def test_pallas_vs_cpu(cfg):
-    B, T, H, K, V = cfg['B'], cfg['T'], cfg['H'], cfg['K'], cfg['V']
-    atol = cfg.get('atol', 1e-5)
-    rtol = cfg.get('rtol', 1e-5)
-    scale = cfg.get('scale', K ** -0.5)
-    chunk_size = cfg.get('chunk_size', 64)
+    B, T, H, K, V = cfg["B"], cfg["T"], cfg["H"], cfg["K"], cfg["V"]
+    atol = cfg.get("atol", 1e-5)
+    rtol = cfg.get("rtol", 1e-5)
+    scale = cfg.get("scale", K**-0.5)
+    chunk_size = cfg.get("chunk_size", 64)
 
     assert T % chunk_size == 0, f"T={T} must be a multiple of chunk_size={chunk_size}"
 

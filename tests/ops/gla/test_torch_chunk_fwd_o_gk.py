@@ -88,8 +88,8 @@ CASES = [
     dict(B=1, T=256, H=2, K=128, V=64, seed=351),
     dict(B=1, T=512, H=2, K=64, V=128, seed=352),
     # ── long + multi-batch ──
-    dict(B=4, T=256,  H=2, K=32,  V=64,  seed=360, atol=5e-2, rtol=5e-2),
-    dict(B=2, T=512,  H=4, K=32,  V=64,  seed=361),
+    dict(B=4, T=256, H=2, K=32, V=64, seed=360, atol=5e-2, rtol=5e-2),
+    dict(B=2, T=512, H=4, K=32, V=64, seed=361),
     # ── long + many heads ──
     dict(B=1, T=256, H=8, K=32, V=64, seed=370),
     dict(B=1, T=512, H=8, K=32, V=64, seed=371),
@@ -139,7 +139,9 @@ def _make_inputs(B, T, H, K, V, chunk_size, scale):
     h = torch.randn(B, NT, H, K, V)
 
     A = torch.randn(B, NT, C, H, C)
-    causal_mask = torch.tril(torch.ones(C, C, dtype=torch.bool))[:, None, :]  # [C, 1, C]
+    causal_mask = torch.tril(torch.ones(C, C, dtype=torch.bool))[
+        :, None, :
+    ]  # [C, 1, C]
     A = A.masked_fill(~causal_mask, 0.0)
 
     # Triton format: [B, NT, C, H, C] -> [B, T, H, C]
@@ -257,7 +259,9 @@ def _make_segment_inputs(B, L, H, K, V, chunk_size, scale):
     g_raw = F.logsigmoid(torch.randn(B, L, H, K))
 
     A_seg = torch.randn(B, NT, C, H, C)
-    causal_mask = torch.tril(torch.ones(C, C, dtype=torch.bool))[:, None, :]  # [C, 1, C]
+    causal_mask = torch.tril(torch.ones(C, C, dtype=torch.bool))[
+        :, None, :
+    ]  # [C, 1, C]
     A_seg = A_seg.masked_fill(~causal_mask, 0.0)
     h_seg = torch.randn(B, NT, H, K, V)
 

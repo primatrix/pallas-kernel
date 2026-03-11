@@ -58,3 +58,33 @@ def pad_to_multiple(x: jax.Array, multiple: int | list, axis: int | list, val):
         pad_len = mu - remainder
         pad_width[ax] = (0, pad_len)
     return jnp.pad(x, pad_width, constant_values=val)
+
+
+def prepare_lens(cu_seqlens: jax.Array) -> jax.Array:
+    """
+    Compute the actual length of each sequence.
+    [0, 48, 64] -> [48, 16]
+    """
+    return cu_seqlens[1:] - cu_seqlens[:-1]
+
+
+def prepare_chunk_indices(
+    cu_seqlens: jax.Array,
+    chunk_size: int,
+) -> jax.Array:
+    """Build a mapping from physical chunks to logical sequences for varlen inputs."""
+    lens = prepare_lens(cu_seqlens)
+    n_chunks = cdiv(lens, chunk_size)
+    total_nt = int(jnp.sum(n_chunks))
+    num_seqs = len(lens)
+
+    seq_ids = jnp.repeat(
+        jnp.arange(num_seqs, dtype=jnp.int32), n_chunks, total_repeat_length=total_nt
+    )
+    prefix_chunks = jnp.concatenate(
+        [jnp.zeros(1, dtype=jnp.int32), jnp.cumsum(n_chunks)]
+    )
+    seq_offsets = jnp.repeat(prefix_chunks[:-1], n_chunks, total_repeat_length=total_nt)
+    block_ids = jnp.arange(total_nt, dtype=jnp.int32) - seq_offsets
+
+    return jnp.stack([seq_ids, block_ids], axis=1)

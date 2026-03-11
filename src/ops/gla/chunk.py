@@ -4,45 +4,144 @@ import jax
 import jax.experimental.pallas as pl
 import jax.numpy as jnp
 import numpy as np
+from jax.experimental.pallas import dslice
+from jax.experimental.pallas import tpu as pltpu
+from src.utils import prepare_chunk_indices
 
 # =============================================================================
 # Sub-function 1: chunk_local_cumsum
 # =============================================================================
 
 
-def chunk_local_cumsum_ref(
+def chunk_cumsum_kernel(
+    cu_seqlens_ref,
+    chunk_indices_ref,
+    s_ref,
+    o_ref,
+    *,
+    BT: int,
+    BS: int,
+    REVERSE: bool,
+    HAS_SCALE: bool,
+    scale: float,
+    IS_VARLEN: bool,
+):
+    i_s, i_t, i_bh = pl.program_id(0), pl.program_id(1), pl.program_id(2)
+
+    i_n, local_i_t = chunk_indices_ref[i_t, 0], chunk_indices_ref[i_t, 1]
+
+    bos, eos = cu_seqlens_ref[i_n], cu_seqlens_ref[i_n + 1]
+
+    start_t, start_s = bos + local_i_t * BT, i_s * BS
+
+    # Each program handles one (BT, BS) tile.
+    s = s_ref[i_bh, dslice(start_t, BT), dslice(start_s, BS)]
+
+    if IS_VARLEN:
+        T_seq = eos - bos
+        valid_len = T_seq - local_i_t * BT
+        valid_mask = (jnp.arange(BT) < valid_len).astype(jnp.float32)[:, None]
+        s = s.astype(jnp.float32) * valid_mask
+    else:
+        s = s.astype(jnp.float32)
+
+    if REVERSE:
+        o = jnp.cumsum(s[::-1], axis=0)[::-1]
+    else:
+        o = jnp.cumsum(s, axis=0)
+
+    if HAS_SCALE:
+        o = o * scale
+
+    if IS_VARLEN:
+        o = (o * valid_mask).astype(o_ref.dtype)
+    else:
+        o = o.astype(o_ref.dtype)
+    o_ref[i_bh, dslice(start_t, BT), dslice(start_s, BS)] = o
+
+
+def chunk_local_cumsum_vector(
     g: jax.Array,
     chunk_size: int,
-    scale: float | None = None,
     reverse: bool = False,
-    cu_seqlens_cpu: jax.Array | None = None,
+    scale: float | None = None,
+    cu_seqlens: jax.Array | None = None,
+    head_first: bool = False,
+    output_dtype: jnp.dtype | None = jnp.float32,
+    chunk_indices: jax.Array | None = None,
 ) -> jax.Array:
-    """Chunk-local cumulative sum of gates.
 
-    Args:
-        g: [B, T, H, K] — log-space gates (T must be a multiple of chunk_size)
-        chunk_size: block size
-        cu_seqlens: unused, kept for interface compatibility
+    assert chunk_size == 2 ** (chunk_size.bit_length() - 1), (
+        "chunk_size must be power of 2"
+    )
 
-    Returns:
-        g_cumsum: [B, T, H, K] — chunk-local cumsum
-    """
-    B, T, H, K = g.shape
-    assert reverse == False, "Reverse mode not supported in chunk_local_cumsum"
-    assert T % chunk_size == 0, (
-        "T must be a multiple of chunk_size for chunk_local_cumsum"
+    if head_first:
+        B, H, T, S = g.shape
+        # Normalize to (B*H, T, S) to greatly simplify pointer offsets in the kernel.
+        g_flat = g.reshape(B * H, T, S)
+    else:
+        B, T, H, S = g.shape
+        g_flat = jnp.transpose(g, (0, 2, 1, 3)).reshape(B * H, T, S)
+
+    BT = chunk_size
+    BS = min(128, S)
+    out_dtype = output_dtype or g.dtype
+    HAS_SCALE = scale is not None
+    scale_val = scale if scale is not None else 1.0
+
+    interpret = jax.local_devices()[0].platform != "tpu"
+
+    # Pad the S dimension to satisfy TPU shape constraints.
+    pad_S = (BS - (S % BS)) % BS
+    if pad_S > 0:
+        g_flat = jnp.pad(g_flat, ((0, 0), (0, 0), (0, pad_S)))
+
+    S_padded = S + pad_S
+    NS = S_padded // BS
+
+    # For fixed-length inputs, synthesize cu_seqlens/chunk_indices to simplify kernel control flow.
+    is_varlen = cu_seqlens is not None
+    if cu_seqlens is None:
+        cu_seqlens = jnp.arange(0, B * T + 1, BT, dtype=jnp.int32)
+    if chunk_indices is None:
+        chunk_indices = prepare_chunk_indices(cu_seqlens, BT)
+    NT = len(chunk_indices)
+    grid = (NS, NT, B * H)
+
+    # In varlen mode, append BT padding at the end to prevent dslice overflow.
+    if is_varlen:
+        g_flat = jnp.pad(g_flat, ((0, 0), (0, BT), (0, 0)))
+
+    kernel = functools.partial(
+        chunk_cumsum_kernel,
+        BT=BT,
+        BS=BS,
+        REVERSE=reverse,
+        HAS_SCALE=HAS_SCALE,
+        scale=scale_val,
+        IS_VARLEN=is_varlen,
     )
-    assert (cu_seqlens_cpu is None) or (cu_seqlens_cpu % T == 0).all(), (
-        "cu_seqlens must be multiples of chunk_size for chunk_local_cumsum"
-    )
-    g = g.reshape(-1, H, K)
-    C = chunk_size
-    NT = B * T // C
-    g = g.reshape(NT, C, H, K)
-    g_cumsum = jnp.cumsum(g, axis=1).reshape(B, T, H, K)
-    if scale is not None:
-        g_cumsum = g_cumsum * scale
-    return g_cumsum
+
+    o_flat = pl.pallas_call(
+        kernel,
+        grid_spec=pltpu.PrefetchScalarGridSpec(
+            num_scalar_prefetch=2,
+            grid=grid,
+            in_specs=pl.no_block_spec,
+            out_specs=pl.no_block_spec,
+        ),
+        out_shape=jax.ShapeDtypeStruct(g_flat.shape, out_dtype),
+        interpret=interpret,
+    )(cu_seqlens, chunk_indices, g_flat)
+
+    # Remove the padding added earlier.
+    o_flat = o_flat[:, :T, :S]
+
+    # Convert the normalized layout back to the user-facing layout.
+    if head_first:
+        return o_flat.reshape(B, H, T, S)
+    else:
+        return jnp.transpose(o_flat.reshape(B, H, T, S), (0, 2, 1, 3))
 
 
 # =============================================================================
@@ -132,6 +231,7 @@ def chunk_fwd_h_ref(
 # Sub-function 3: chunk_gla_fwd_intra_gk
 # =============================================================================
 
+
 def chunk_gla_fwd_intra_gk_ref(
     q: jax.Array,
     k: jax.Array,
@@ -165,7 +265,7 @@ def chunk_gla_fwd_intra_gk_ref(
     k_gated = k_c * jnp.exp(-g_c)
 
     # [B, NT, H, C, K] @ [B, NT, H, K, C] -> [B, NT, H, C, C] -> [B, NT, C, H, C]
-    A = jnp.einsum('bnihk,bnjhk->bnihj', q_gated, k_gated) * scale
+    A = jnp.einsum("bnihk,bnjhk->bnihj", q_gated, k_gated) * scale
     A = A.reshape(B, T, H, C)
 
     return A
@@ -175,10 +275,15 @@ def chunk_gla_fwd_intra_gk_ref(
 # Pallas kernel: chunk_gla_fwd_intra_gk
 # =============================================================================
 
+
 def chunk_gla_fwd_intra_gk_pl(
-    q_ref, k_ref, g_ref,    # in
-    A_ref,                  # out
-    *, BT, scale,
+    q_ref,
+    k_ref,
+    g_ref,  # in
+    A_ref,  # out
+    *,
+    BT,
+    scale,
 ):
     """GLA forward intra-chunk attention matrix Pallas kernel.
 
@@ -187,24 +292,30 @@ def chunk_gla_fwd_intra_gk_pl(
       q_ref/k_ref/g_ref: (1, 1, BT, K)
       A_ref: (1, 1, BT, BT)
     """
-    b_q = q_ref[0, 0]   # (BT, K)
-    b_k = k_ref[0, 0]   # (BT, K)
+    b_q = q_ref[0, 0]  # (BT, K)
+    b_k = k_ref[0, 0]  # (BT, K)
     b_g = g_ref[0, 0].astype(jnp.float32)  # (BT, K)
 
     b_qg = (b_q * jnp.exp(b_g)).astype(b_q.dtype)
     b_kg = (b_k * jnp.exp(-b_g)).astype(b_k.dtype)
 
-    b_A = jnp.dot(b_qg, b_kg.T,
-                  precision=jax.lax.Precision.HIGHEST,
-                  preferred_element_type=jnp.float32) * scale
+    b_A = (
+        jnp.dot(
+            b_qg,
+            b_kg.T,
+            precision=jax.lax.Precision.HIGHEST,
+            preferred_element_type=jnp.float32,
+        )
+        * scale
+    )
 
     A_ref[0, 0] = b_A.astype(A_ref.dtype)
 
 
 def chunk_gla_fwd_intra_gk(
-    q: jax.Array,          # [B, T, H, K]
-    k: jax.Array,          # [B, T, H, K]
-    g: jax.Array,          # [B, T, H, K]
+    q: jax.Array,  # [B, T, H, K]
+    k: jax.Array,  # [B, T, H, K]
+    g: jax.Array,  # [B, T, H, K]
     scale: float,
     chunk_size: int,
 ) -> jax.Array:
@@ -241,9 +352,9 @@ def chunk_gla_fwd_intra_gk(
 
     # Post-reshape: [H, total_NT, BT, BT] -> [B, T, H, BT]
     A = A.reshape(H, B, NT, BT, BT)
-    A = A.transpose(1, 0, 2, 3, 4)    # (B, H, NT, BT, BT)
+    A = A.transpose(1, 0, 2, 3, 4)  # (B, H, NT, BT, BT)
     A = A.reshape(B, H, NT * BT, BT)  # (B, H, T, BT)
-    A = A.transpose(0, 2, 1, 3)       # (B, T, H, BT)
+    A = A.transpose(0, 2, 1, 3)  # (B, T, H, BT)
     return A
 
 
@@ -349,7 +460,7 @@ def chunk_gla_fwd(
         g = jnp.pad(g, pad_width)
 
     if g_cumsum is None:
-        g_cumsum = chunk_local_cumsum_ref(g, C, cu_seqlens_cpu=cu_seqlens)
+        g_cumsum = chunk_local_cumsum_vector(g, C, cu_seqlens=cu_seqlens)
 
     h, ht = chunk_fwd_h_ref(
         k,

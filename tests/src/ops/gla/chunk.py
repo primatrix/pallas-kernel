@@ -138,7 +138,7 @@ def chunk_gla_fwd_intra_gk(
     k_gated = k_c * (-g_c).exp()  # [B, NT, C, H, K]
 
     # A[b,n,h,i,j] = scale * Σ_k q_gated[b,n,i,h,k] * k_gated[b,n,j,h,k]
-    A = torch.einsum('bnihk,bnjhk->bnihj', q_gated, k_gated) * scale  # [B, NT, H, C, C]
+    A = torch.einsum("bnihk,bnjhk->bnihj", q_gated, k_gated) * scale  # [B, NT, H, C, C]
 
     return A
 
@@ -187,7 +187,9 @@ def chunk_gla_fwd_o_gk(
     C = chunk_size
     NT = B * T // C
     assert T % C == 0, "T must be a multiple of chunk_size for chunk_gla_fwd_o_gk_ref"
-    assert (cu_seqlens is None) or (cu_seqlens % C == 0).all(), "cu_seqlens must be multiples of chunk_size for chunk_fwd_h"
+    assert (cu_seqlens is None) or (cu_seqlens % C == 0).all(), (
+        "cu_seqlens must be multiples of chunk_size for chunk_fwd_h"
+    )
 
     q = q.reshape(-1, C, H, K)
     v = v.reshape(-1, C, H, V)
@@ -198,14 +200,18 @@ def chunk_gla_fwd_o_gk(
     qg = q * gk.exp()
 
     # Inter-chunk: o_inter = scale * (q_gated @ h)
-    o_inter = scale * torch.einsum('nchk,nhkv->nchv', qg, h)  # [C, K] @ [K, V] -> [C, V]
+    o_inter = scale * torch.einsum(
+        "nchk,nhkv->nchv", qg, h
+    )  # [C, K] @ [K, V] -> [C, V]
 
-    causal_mask = torch.tril(torch.ones((C, C), dtype=torch.bool))[:, None, :]  # (C, 1, C) → broadcasts to (NT, C, H, C)
+    causal_mask = torch.tril(torch.ones((C, C), dtype=torch.bool))[
+        :, None, :
+    ]  # (C, 1, C) → broadcasts to (NT, C, H, C)
     n_A = torch.where(causal_mask, A, 0.0)
 
     # [C, C] @ [C, V] -> [C, V]
     # Intra-chunk: o_intra = A @ v, contract over j (key position within chunk)
-    o_intra = torch.einsum('nihj,njhv->nihv', n_A, v)
+    o_intra = torch.einsum("nihj,njhv->nihv", n_A, v)
 
     o = (o_inter + o_intra).reshape(B, T, H, V)
     return o
