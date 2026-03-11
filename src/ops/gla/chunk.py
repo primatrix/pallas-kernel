@@ -49,7 +49,7 @@ def chunk_cumsum_kernel(
     if REVERSE:
         rows = [s[T - 1]]
         for i in range(T - 2, -1, -1):
-            rows.append(rows[-1] + s[i])  
+            rows.append(rows[-1] + s[i])
         rows.reverse()
         o = jnp.stack(rows, axis=0)
 
