@@ -132,8 +132,7 @@ def chunk_fwd_h_ref(
 # Sub-function 3: chunk_gla_fwd_intra_gk
 # =============================================================================
 
-
-def chunk_gla_fwd_intra_gk(
+def chunk_gla_fwd_intra_gk_ref(
     q: jax.Array,
     k: jax.Array,
     g: jax.Array,
@@ -152,7 +151,7 @@ def chunk_gla_fwd_intra_gk(
         chunk_size: block size
 
     Returns:
-        A: [B, NT, H, C, C] — intra-chunk causal attention matrix
+        A: [B, NT, C, H, C] — intra-chunk causal attention matrix
     """
     B, T, H, K = q.shape
     C = chunk_size
@@ -165,11 +164,86 @@ def chunk_gla_fwd_intra_gk(
     q_gated = q_c * jnp.exp(g_c)
     k_gated = k_c * jnp.exp(-g_c)
 
-    A = jnp.einsum("bnihk,bnjhk->bnihj", q_gated, k_gated)
+    # [B, NT, H, C, K] @ [B, NT, H, K, C] -> [B, NT, H, C, C] -> [B, NT, C, H, C]
+    A = jnp.einsum('bnihk,bnjhk->bnihj', q_gated, k_gated) * scale
     A = A.reshape(B, T, H, C)
-    # causal_mask = jnp.tril(jnp.ones((C, C), dtype=jnp.bool_))
-    # A = jnp.where(causal_mask, A, 0.0)
 
+    return A
+
+
+# =============================================================================
+# Pallas kernel: chunk_gla_fwd_intra_gk
+# =============================================================================
+
+def chunk_gla_fwd_intra_gk_pl(
+    q_ref, k_ref, g_ref,    # in
+    A_ref,                  # out
+    *, BT, scale,
+):
+    """GLA forward intra-chunk attention matrix Pallas kernel.
+
+    Grid: (H, total_NT) where total_NT = B * NT.
+    Refs (after block spec indexing):
+      q_ref/k_ref/g_ref: (1, 1, BT, K)
+      A_ref: (1, 1, BT, BT)
+    """
+    b_q = q_ref[0, 0]   # (BT, K)
+    b_k = k_ref[0, 0]   # (BT, K)
+    b_g = g_ref[0, 0].astype(jnp.float32)  # (BT, K)
+
+    b_qg = (b_q * jnp.exp(b_g)).astype(b_q.dtype)
+    b_kg = (b_k * jnp.exp(-b_g)).astype(b_k.dtype)
+
+    b_A = jnp.dot(b_qg, b_kg.T,
+                  precision=jax.lax.Precision.HIGHEST,
+                  preferred_element_type=jnp.float32) * scale
+
+    A_ref[0, 0] = b_A.astype(A_ref.dtype)
+
+
+def chunk_gla_fwd_intra_gk(
+    q: jax.Array,          # [B, T, H, K]
+    k: jax.Array,          # [B, T, H, K]
+    g: jax.Array,          # [B, T, H, K]
+    scale: float,
+    chunk_size: int,
+) -> jax.Array:
+    """Launcher for chunk_gla_fwd_intra_gk Pallas kernel.
+
+    Pre-reshapes inputs to (H, total_NT, ...) so the kernel is
+    agnostic to batch/varlen structure.
+
+    Returns:
+        A: [B, T, H, BT] — intra-chunk attention matrix (float32)
+    """
+    B, T, H, K = q.shape
+    BT = chunk_size
+    NT = T // BT
+    total_NT = B * NT
+
+    # Reshape: [B, T, H, K] -> [B, NT, BT, H, K] -> [H, B*NT, BT, K]
+    _q = q.reshape(B, NT, BT, H, K).transpose(3, 0, 1, 2, 4).reshape(H, total_NT, BT, K)
+    _k = k.reshape(B, NT, BT, H, K).transpose(3, 0, 1, 2, 4).reshape(H, total_NT, BT, K)
+    _g = g.reshape(B, NT, BT, H, K).transpose(3, 0, 1, 2, 4).reshape(H, total_NT, BT, K)
+
+    # Block specs — grid = (H, total_NT)
+    spec = pl.BlockSpec([1, 1, BT, K], index_map=lambda h, nt: (h, nt, 0, 0))
+    A_spec = pl.BlockSpec([1, 1, BT, BT], index_map=lambda h, nt: (h, nt, 0, 0))
+    A_shape = jax.ShapeDtypeStruct([H, total_NT, BT, BT], jnp.float32)
+
+    A = pl.pallas_call(
+        functools.partial(chunk_gla_fwd_intra_gk_pl, BT=BT, scale=scale),
+        grid=(H, total_NT),
+        out_shape=A_shape,
+        in_specs=[spec, spec, spec],
+        out_specs=A_spec,
+    )(_q, _k, _g)
+
+    # Post-reshape: [H, total_NT, BT, BT] -> [B, T, H, BT]
+    A = A.reshape(H, B, NT, BT, BT)
+    A = A.transpose(1, 0, 2, 3, 4)    # (B, H, NT, BT, BT)
+    A = A.reshape(B, H, NT * BT, BT)  # (B, H, T, BT)
+    A = A.transpose(0, 2, 1, 3)       # (B, T, H, BT)
     return A
 
 

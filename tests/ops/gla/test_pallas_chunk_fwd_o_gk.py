@@ -92,8 +92,9 @@ def _torch_to_jax(t: torch.Tensor) -> jax.Array:
 def _make_inputs(B, T, H, K, V, chunk_size, scale):
     """Generate random inputs for chunk_gla_fwd_o_gk.
 
-    A is generated in CPU format [B, NT, H, C, C] (causal-masked),
-    then converted to Pallas format [B, T, H, C] via permute+reshape.
+    A is generated in internal format [B, NT, C_i, H, C_j] (causal-masked),
+    matching the layout produced by chunk_gla_fwd_intra_gk.
+    Pallas format is [B, T, H, C] obtained by a simple reshape.
     """
     C = chunk_size
     NT = T // C
@@ -103,12 +104,10 @@ def _make_inputs(B, T, H, K, V, chunk_size, scale):
     g = F.logsigmoid(torch.randn(B, T, H, K))
     h = torch.randn(B, NT, H, K, V)
 
-    A_cpu = torch.randn(B, NT, H, C, C)
-    causal_mask = torch.tril(torch.ones(C, C, dtype=torch.bool))
-    A_cpu = A_cpu.masked_fill(~causal_mask, 0.0)
+    A_cpu = torch.randn(B, NT, C, H, C)
 
-    # Pallas format: [B, NT, H, C_i, C_j] -> [B, NT, C_i, H, C_j] -> [B, T, H, C]
-    A_pallas = A_cpu.permute(0, 1, 3, 2, 4).reshape(B, T, H, C).contiguous()
+    # Pallas format: [B, NT, C_i, H, C_j] -> [B, T, H, C]
+    A_pallas = A_cpu.reshape(B, T, H, C).contiguous()
 
     return q, v, g, A_cpu, A_pallas, h
 
@@ -120,11 +119,11 @@ def _make_inputs(B, T, H, K, V, chunk_size, scale):
 
 @pytest.mark.parametrize("cfg", CASES, ids=[_case_id(c) for c in CASES])
 def test_pallas_vs_cpu(cfg):
-    B, T, H, K, V = cfg["B"], cfg["T"], cfg["H"], cfg["K"], cfg["V"]
-    atol = cfg.get("atol", 1e-2)
-    rtol = cfg.get("rtol", 1e-2)
-    scale = cfg.get("scale", K**-0.5)
-    chunk_size = cfg.get("chunk_size", 64)
+    B, T, H, K, V = cfg['B'], cfg['T'], cfg['H'], cfg['K'], cfg['V']
+    atol = cfg.get('atol', 1e-5)
+    rtol = cfg.get('rtol', 1e-5)
+    scale = cfg.get('scale', K ** -0.5)
+    chunk_size = cfg.get('chunk_size', 64)
 
     assert T % chunk_size == 0, f"T={T} must be a multiple of chunk_size={chunk_size}"
 
@@ -206,9 +205,7 @@ def _make_segment_inputs(B, L, H, K, V, chunk_size, scale):
     v_raw = torch.randn(B, L, H, V)
     g_raw = F.logsigmoid(torch.randn(B, L, H, K))
 
-    A_seg = torch.randn(B, NT, H, C, C)
-    causal_mask = torch.tril(torch.ones(C, C, dtype=torch.bool))
-    A_seg = A_seg.masked_fill(~causal_mask, 0.0)
+    A_seg = torch.randn(B, NT, C, H, C)
     h_seg = torch.randn(B, NT, H, K, V)
 
     # Pad and compute reference
@@ -259,12 +256,12 @@ def test_pallas_varlen_vs_segments(cfg):
     q_packed = torch.cat(qs, dim=1)
     v_packed = torch.cat(vs, dim=1)
     g_packed = torch.cat(gs, dim=1)
-    # A in Pallas format: [B, NT, H, C, C] -> [B, NT, C, H, C] -> [B, T_seg, H, C]
+    # A in Pallas format: [B, NT, C_i, H, C_j] -> [B, T_seg, H, C]
     # then concat along T dimension
     A_pallas_segs = []
     for A_seg in A_all:
         BN, NT_seg = A_seg.shape[:2]
-        A_p = A_seg.permute(0, 1, 3, 2, 4).reshape(BN, NT_seg * C, H, C)
+        A_p = A_seg.reshape(BN, NT_seg * C, H, C)
         A_pallas_segs.append(A_p)
     A_packed = torch.cat(A_pallas_segs, dim=1)
     h_packed = torch.cat(h_all, dim=1)
