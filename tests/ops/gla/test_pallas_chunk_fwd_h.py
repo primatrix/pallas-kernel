@@ -163,8 +163,8 @@ def test_native_tpu_vs_pallas(cfg):
             chunk_size=chunk_size,
             cu_seqlens=cu,
         )
-        jax.block_until_ready(h)
-        jax.block_until_ready(ht)
+        jax.block_until_ready(pallas_h)
+        jax.block_until_ready(pallas_ht)
     print(f'cost time {(time.perf_counter() - start_time) / times}')
     # assert compare_tensor("h", h, pallas_h, atol=atol, rtol=rtol)
     # assert compare_tensor("ht", ht, pallas_ht, atol=atol, rtol=rtol)
