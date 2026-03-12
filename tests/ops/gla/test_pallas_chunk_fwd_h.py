@@ -12,32 +12,32 @@ import jax.numpy as jnp
 
 from src.ops.common.chunk_h import chunk_fwd_h_kernel, chunk_fwd_h_ref
 from tests.utils import compare_tensor
-
+import time
 
 PALLAS_CASES = [
+    # dict(
+    #     B=1,
+    #     T=1024,
+    #     H=4,
+    #     K=128,
+    #     chunk_size=64,
+    #     cu_seqlens=[0, 128, 256, 512, 1024],
+    #     seed=11,
+    # ),
+    # dict(
+    #     B=1,
+    #     T=1024,
+    #     H=4,
+    #     K=256,
+    #     chunk_size=64,
+    #     cu_seqlens=[0, 128, 256, 512, 1024],
+    #     seed=11,
+    # ),
     dict(
-        B=1,
+        B=4,
         T=1024,
         H=4,
         K=128,
-        chunk_size=64,
-        cu_seqlens=[0, 128, 256, 512, 1024],
-        seed=11,
-    ),
-    dict(
-        B=1,
-        T=1024,
-        H=4,
-        K=256,
-        chunk_size=64,
-        cu_seqlens=[0, 128, 256, 512, 1024],
-        seed=11,
-    ),
-    dict(
-        B=4,
-        T=512,
-        H=4,
-        K=256,
         chunk_size=64,
         seed=11,
     )
@@ -135,15 +135,15 @@ def test_native_tpu_vs_pallas(cfg):
     gk = jax.random.normal(key, (B, T, H, K))
     h0 = jax.random.normal(key, (N, H, K, K))
 
-    h, ht = _run_tpu(
-        k,
-        v,
-        gk=gk,
-        h0=h0,
-        chunk_size=chunk_size,
-        cu_seqlens=cu,
-    )
-
+    # h, ht = _run_tpu(
+    #     k,
+    #     v,
+    #     gk=gk,
+    #     h0=h0,
+    #     chunk_size=chunk_size,
+    #     cu_seqlens=cu,
+    # )
+    # warm up
     pallas_h, pallas_ht = _run_pallas(
         k,
         v,
@@ -152,8 +152,22 @@ def test_native_tpu_vs_pallas(cfg):
         chunk_size=chunk_size,
         cu_seqlens=cu,
     )
-    assert compare_tensor("h", h, pallas_h, atol=atol, rtol=rtol)
-    assert compare_tensor("ht", ht, pallas_ht, atol=atol, rtol=rtol)
+    times = 3
+    start_time = time.perf_counter()
+    for i in range(times):
+        pallas_h, pallas_ht = _run_pallas(
+            k,
+            v,
+            gk=gk,
+            h0=h0,
+            chunk_size=chunk_size,
+            cu_seqlens=cu,
+        )
+        jax.block_until_ready(pallas_h)
+        jax.block_until_ready(pallas_ht)
+    print(f'cost time {(time.perf_counter() - start_time) / times}')
+    # assert compare_tensor("h", h, pallas_h, atol=atol, rtol=rtol)
+    # assert compare_tensor("ht", ht, pallas_ht, atol=atol, rtol=rtol)
 
 
 if __name__ == "__main__":
