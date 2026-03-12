@@ -6,6 +6,12 @@ from jax.experimental.pallas import tpu as pltpu
 import functools
 import numpy as np
 
+def build_chunk_map(cu_seqlens, BT):
+    T_sum = cu_seqlens[-1]
+    NT = T_sum // BT
+    chunk_pos = jnp.arange(NT) * BT
+    seq_idx = jnp.searchsorted(cu_seqlens[1:], chunk_pos, side="right")
+    return seq_idx
 
 def _chunk_fwd_h_kernel(
     k_ref, # [1, T_sum, BK]
@@ -13,6 +19,7 @@ def _chunk_fwd_h_kernel(
     h0_ref , # [N, 1, BK, BV]
     gk_ref, # [1, T_sum, BK]
     cu_seqlens_ref, # [num_seq+1]
+    chunk_to_seq, # [T_sum/BT]
     h_ref, # [NS, 1, BK, BV]
     ht_ref, # [N, 1, BK , BV]
     *,
@@ -31,12 +38,12 @@ def _chunk_fwd_h_kernel(
         b_h, seq_idx = carry
         t0 = i_t * BT
 
-        # find current chunk belongs to which sequence
-        def seq_scan(n, idx):
-            cond = (t0 >= cu_seqlens_ref[n]) & (t0 < cu_seqlens_ref[n+1])
-            return jnp.where(cond, n, idx)
+        # # find current chunk belongs to which sequence
+        # def seq_scan(n, idx):
+        #     cond = (t0 >= cu_seqlens_ref[n]) & (t0 < cu_seqlens_ref[n+1])
+        #     return jnp.where(cond, n, idx)
 
-        seq_idx = lax.fori_loop(0, N, seq_scan, seq_idx)
+        seq_idx = chunk_to_seq[i_t]
     
         bos = cu_seqlens_ref[seq_idx]
         # reset h state
@@ -110,7 +117,7 @@ def chunk_fwd_h_kernel(
     h0: jax.Array | None = None, # [N,H,K,V]
     output_final_state: bool = False,
     cu_seqlens: jax.Array | None = None,
-    chunk_size: int = 64,
+    chunk_size: int = 128,
     split_size: int | None = None,
     states_in_fp32: bool = False,
     interpret:bool = False,
@@ -133,6 +140,7 @@ def chunk_fwd_h_kernel(
     if cu_seqlens is None:
         cu_seqlens=jnp.arange(B * T + 1, step=T)
 
+    chunk_to_seq = build_chunk_map(cu_seqlens=cu_seqlens, BT=BT)
     T_sum = B * T
     N, NS = len(cu_seqlens) - 1, T_sum // BS # split_offsets[-1] # NS number of chunk_size
 
@@ -186,7 +194,8 @@ def chunk_fwd_h_kernel(
     else:
         in_specs.append(None)
 
-    in_specs.append(pl.BlockSpec(memory_space=pltpu.SMEM))    
+    in_specs.append(pl.BlockSpec(memory_space=pltpu.SMEM))  
+    in_specs.append(pl.BlockSpec(memory_space=pltpu.SMEM))  
     kernel = functools.partial(_chunk_fwd_h_kernel,
                                 BT=BT,
                                 BS=BS,
@@ -209,7 +218,7 @@ def chunk_fwd_h_kernel(
             ),
             vmem_limit_bytes=128 * 1024 * 1024,
         ),
-    )(k, v, h0, gk, cu_seqlens)
+    )(k, v, h0, gk, cu_seqlens, chunk_to_seq)
     if output_final_state:
         return h, ht
     return h, None
