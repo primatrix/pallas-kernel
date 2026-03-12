@@ -6,8 +6,7 @@ from jax.experimental.pallas import tpu as pltpu
 import functools
 import numpy as np
 
-def build_chunk_map(cu_seqlens, BT):
-    T_sum = cu_seqlens[-1]
+def build_chunk_map(cu_seqlens, T_sum, BT):
     NT = T_sum // BT
     chunk_ids = lax.iota(jnp.int32, NT)
     chunk_pos = chunk_ids * BT
@@ -140,9 +139,9 @@ def chunk_fwd_h_kernel(
     # N: the actual number of sequences in the batch with either equal or variable lengths
     if cu_seqlens is None:
         cu_seqlens=jnp.arange(B * T + 1, step=T)
-
-    chunk_to_seq = build_chunk_map(cu_seqlens=cu_seqlens, BT=BT)
     T_sum = B * T
+    chunk_to_seq = build_chunk_map(cu_seqlens=cu_seqlens, T_sum=T_sum,  BT=BT)
+
     N, NS = len(cu_seqlens) - 1, T_sum // BS # split_offsets[-1] # NS number of chunk_size
 
     k = jnp.reshape(k, (T_sum, H, K))
