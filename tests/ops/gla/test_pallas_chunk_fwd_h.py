@@ -152,6 +152,9 @@ def test_native_tpu_vs_pallas(cfg):
     #     chunk_size=chunk_size,
     #     cu_seqlens=cu,
     # )
+    jax.block_until_ready(h)
+    jax.block_until_ready(ht)
+    
     times = 3
     start_time = time.perf_counter()
     for i in range(times):
