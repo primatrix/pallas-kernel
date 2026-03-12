@@ -67,17 +67,15 @@ def _chunk_fwd_h_kernel(
 
         k = k_ref[(0, pl.dslice(t0, BT), slice(None))]      # [BT,BK]                  
         v = v_ref[(0, pl.dslice(t0, BT), slice(None))]      # [BT,BV]
-        k = jnp.transpose(k)           # [BK,BT]
         if gk_ref is not None:
-            gk = gk_ref[(0, pl.dslice(t0, BT), slice(None))]
-            gk = jnp.transpose(gk)     # [BK,BT]
-            g_last = gk[:, -1]
+            gk = gk_ref[(0, pl.dslice(t0, BT), slice(None))] # [BT，BK]  
+            g_last = gk[-1,:]
             decay = jnp.exp(g_last)
-            b_h = b_h * decay[:, None]
-            k = (k * jnp.exp(g_last[:, None] - gk)).astype(k.dtype)
+            b_h = b_h * decay[:,None] # [BK, BV] * [BK,1]
+            k = (k * jnp.exp(g_last[None,:] - gk)).astype(k.dtype)
 
         # state update
-        b_h = b_h + jax.lax.dot(k, v)
+        b_h = b_h + jax.lax.dot(k.T, v)
 
         eos = cu_seqlens_ref[seq_idx + 1]
 
