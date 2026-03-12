@@ -9,7 +9,8 @@ import numpy as np
 def build_chunk_map(cu_seqlens, BT):
     T_sum = cu_seqlens[-1]
     NT = T_sum // BT
-    chunk_pos = jnp.arange(NT) * BT
+    chunk_ids = lax.iota(jnp.int32, NT)
+    chunk_pos = chunk_ids * BT
     seq_idx = jnp.searchsorted(cu_seqlens[1:], chunk_pos, side="right")
     return seq_idx
 
