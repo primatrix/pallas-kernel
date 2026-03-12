@@ -135,16 +135,7 @@ def test_native_tpu_vs_pallas(cfg):
     gk = jax.random.normal(key, (B, T, H, K))
     h0 = jax.random.normal(key, (N, H, K, K))
 
-    h, ht = _run_tpu(
-        k,
-        v,
-        gk=gk,
-        h0=h0,
-        chunk_size=chunk_size,
-        cu_seqlens=cu,
-    )
-    # warm up
-    # pallas_h, pallas_ht = _run_pallas(
+    # h, ht = _run_tpu(
     #     k,
     #     v,
     #     gk=gk,
@@ -152,13 +143,23 @@ def test_native_tpu_vs_pallas(cfg):
     #     chunk_size=chunk_size,
     #     cu_seqlens=cu,
     # )
-    jax.block_until_ready(h)
-    jax.block_until_ready(ht)
+    # warm up
+    pallas_h, pallas_ht = _run_pallas(
+        k,
+        v,
+        gk=gk,
+        h0=h0,
+        chunk_size=chunk_size,
+        cu_seqlens=cu,
+    )
+    jax.block_until_ready(pallas_h)
+    jax.block_until_ready(pallas_ht)
 
     times = 3
     start_time = time.perf_counter()
+    jax.profiler.start_profile("/home/gcpuser/profile")
     for i in range(times):
-        pallas_h, pallas_ht = _run_tpu(
+        pallas_h, pallas_ht = _run_pallas(
             k,
             v,
             gk=gk,
@@ -168,6 +169,7 @@ def test_native_tpu_vs_pallas(cfg):
         )
         jax.block_until_ready(pallas_h)
         jax.block_until_ready(pallas_ht)
+    jax.profiler.stop_profile()
     print(f'cost time {(time.perf_counter() - start_time) / times}')
     # assert compare_tensor("h", h, pallas_h, atol=atol, rtol=rtol)
     # assert compare_tensor("ht", ht, pallas_ht, atol=atol, rtol=rtol)
