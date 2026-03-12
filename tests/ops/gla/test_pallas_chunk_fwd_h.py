@@ -69,7 +69,7 @@ def _run_tpu(
     v,
     gk=None,
     h0=None,
-    chunk_size=64,
+    chunk_size=128,
     *,
     cu_seqlens=None,
 ):
