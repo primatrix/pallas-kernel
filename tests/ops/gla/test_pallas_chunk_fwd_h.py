@@ -13,6 +13,7 @@ import jax.numpy as jnp
 from src.ops.common.chunk_h import chunk_fwd_h_kernel, chunk_fwd_h_ref
 from tests.utils import compare_tensor
 import time
+from sgl_jax.srt.kernels.utils.perf import multiple_iteration_timeit_from_trace
 
 PALLAS_CASES = [
     # dict(
@@ -144,33 +145,24 @@ def test_native_tpu_vs_pallas(cfg):
     #     cu_seqlens=cu,
     # )
     # warm up
-    pallas_h, pallas_ht = _run_pallas(
-        k,
-        v,
-        gk=gk,
-        h0=h0,
-        chunk_size=chunk_size,
-        cu_seqlens=cu,
+    import functools
+    attn = functools.partial(
+        _run_pallas, k, v, gk=gk, h0=h0, chunk_size=chunk_size, cu_seqlens=cu,
     )
-    jax.block_until_ready(pallas_h)
-    jax.block_until_ready(pallas_ht)
 
-    times = 3
-    start_time = time.perf_counter()
-    jax.profiler.start_trace("/home/gcpuser/profile")
-    for i in range(times):
-        pallas_h, pallas_ht = _run_pallas(
-            k,
-            v,
-            gk=gk,
-            h0=h0,
-            chunk_size=chunk_size,
-            cu_seqlens=cu,
-        )
-        jax.block_until_ready(pallas_h)
-        jax.block_until_ready(pallas_ht)
-    jax.profiler.stop_trace()
-    print(f'cost time {(time.perf_counter() - start_time) / times}')
+    h, ht = attn()
+    jax.block_until_ready(h)
+    jax.block_until_ready(ht)
+
+    times = multiple_iteration_timeit_from_trace(
+        compute_func=lambda: attn(),
+        data_generator=lambda: (),
+        task=f"block_q_pallas",
+        tries=3,
+    )
+    import numpy as np 
+    avg_time = float(np.mean(times)) if times else float("nan")
+    print(f'avg_time {avg_time}')
     # assert compare_tensor("h", h, pallas_h, atol=atol, rtol=rtol)
     # assert compare_tensor("ht", ht, pallas_ht, atol=atol, rtol=rtol)
 
