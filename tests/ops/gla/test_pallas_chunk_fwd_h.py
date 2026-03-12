@@ -157,7 +157,7 @@ def test_native_tpu_vs_pallas(cfg):
 
     times = 3
     start_time = time.perf_counter()
-    jax.profiler.start_profile("/home/gcpuser/profile")
+    jax.profiler.start_trace("/home/gcpuser/profile")
     for i in range(times):
         pallas_h, pallas_ht = _run_pallas(
             k,
@@ -169,7 +169,7 @@ def test_native_tpu_vs_pallas(cfg):
         )
         jax.block_until_ready(pallas_h)
         jax.block_until_ready(pallas_ht)
-    jax.profiler.stop_profile()
+    jax.profiler.stop_trace()
     print(f'cost time {(time.perf_counter() - start_time) / times}')
     # assert compare_tensor("h", h, pallas_h, atol=atol, rtol=rtol)
     # assert compare_tensor("ht", ht, pallas_ht, atol=atol, rtol=rtol)
