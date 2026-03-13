@@ -243,6 +243,9 @@ def _chunk_fwd_h_kernel_with_same_seq(
     gk_ref,  # [1, 1, T, BK]
     h_ref,  # [1, NS, 1, BK, BV]
     ht_ref,  # [1, 1, BK , BV]
+    k_scratch_ref,
+    v_scratch_ref,
+    gk_scratch_ref,
     local_copy_sem0,
     local_copy_sem1,
     local_copy_sem2,
@@ -261,33 +264,29 @@ def _chunk_fwd_h_kernel_with_same_seq(
 
     if h0_ref is not None:
         b_h = h0_ref[0, 0]
-    
-    k = pl.empty((2, BT, BK), k_ref.dtype)
-
-    v = pl.empty((2, BT, BV), v_ref.dtype)
 
     copy_k0 = pltpu.make_async_copy(
         k_ref[(0, 0,  pl.dslice(0, BT), slice(None))],
-        k[0],
+        k_scratch_ref[0],
         local_copy_sem0,
     )
     copy_k0.start()
     copy_k1 = pltpu.make_async_copy(
         k_ref[(0, 0,  pl.dslice(BT, BT), slice(None))],
-        k[1],
+        k_scratch_ref[1],
         local_copy_sem1,
     )
     copy_k1.start()
 
     copy_v0 = pltpu.make_async_copy(
         v_ref[(0, 0,  pl.dslice(0, BT), slice(None))],
-        v[0],
+        v_scratch_ref[0],
         local_copy_sem2,
     )
     copy_v0.start()
     copy_v1 = pltpu.make_async_copy(
         v_ref[(0, 0,  pl.dslice(BT, BT), slice(None))],
-        v[1],
+        v_scratch_ref[1],
         local_copy_sem3,
     )
     copy_v1.start()
@@ -296,13 +295,13 @@ def _chunk_fwd_h_kernel_with_same_seq(
         gk = pl.empty((2, BT, BK), gk_ref.dtype)
         copy_gk0 = pltpu.make_async_copy(
             gk_ref[(0, 0,  pl.dslice(0, BT), slice(None))],
-            gk[0],
+            gk_scratch_ref[0],
             local_copy_sem4,
         )
         copy_gk0.start()
         copy_gk1 = pltpu.make_async_copy(
             gk_ref[(0, 0,  pl.dslice(jnp.minimum(BT, T-BT), BT), slice(None))],
-            gk[1],
+            gk_scratch_ref[1],
             local_copy_sem5,
         )
         copy_gk1.start()
@@ -321,12 +320,12 @@ def _chunk_fwd_h_kernel_with_same_seq(
         b_index = jnp.mod(i_t - 1, 2)
         if copy_gk0 is not None:
             copy_gk0.wait()
-            g_last = gk[b_index][-1, :]
+            g_last = gk_scratch_ref[b_index][-1, :]
             decay = jnp.exp(g_last)
             b_h = b_h * decay[:, None]  # [BK, BV] * [BK,1]
-            k[b_index] = (k[b_index] * jnp.exp(g_last[None, :] - gk[b_index])).astype(gk[b_index].dtype)
+            k_scratch_ref[b_index] = (k_scratch_ref[b_index] * jnp.exp(g_last[None, :] - gk_scratch_ref[b_index])).astype(gk_scratch_ref[b_index].dtype)
         
-        b_h = b_h + jax.lax.dot(k[b_index].T, v[b_index])      
+        b_h = b_h + jax.lax.dot(k_scratch_ref[b_index].T, v_scratch_ref[b_index])      
         i_s = i_t // NTS
 
         def store_fn(_):
@@ -338,13 +337,13 @@ def _chunk_fwd_h_kernel_with_same_seq(
 
         copy_k0 = pltpu.make_async_copy(
             k_ref[(0, 0,  pl.dslice(t0, BT), slice(None))],
-            k[b_index],
+            k_scratch_ref[b_index],
             local_copy_sem0,
         )
         copy_k0.start()
         copy_v0 = pltpu.make_async_copy(
             v_ref[(0, 0,  pl.dslice(t0, BT), slice(None))],
-            v[b_index],
+            v_scratch_ref[b_index],
             local_copy_sem1,
         )
         copy_v0.start()
@@ -352,7 +351,7 @@ def _chunk_fwd_h_kernel_with_same_seq(
         if gk_ref is not None:
             copy_gk0 = pltpu.make_async_copy(
                 gk_ref[(0, 0,  pl.dslice(t0, BT), slice(None))],
-                gk[b_index],
+                gk_scratch_ref[b_index],
                 local_copy_sem2,
             )
             copy_gk0.start()
@@ -367,11 +366,11 @@ def _chunk_fwd_h_kernel_with_same_seq(
     copy_v0.wait()
     if copy_gk0 is not None:
         copy_gk0.wait()
-        g_last = gk[b_index][-1, :]
+        g_last = gk_scratch_ref[b_index][-1, :]
         decay = jnp.exp(g_last)
         b_h = b_h * decay[:, None]  # [BK, BV] * [BK,1]
-        k[b_index] = (k[b_index] * jnp.exp(g_last[None, :] - gk[b_index])).astype(gk[b_index].dtype)
-    b_h = b_h + jax.lax.dot(k[b_index].T, v[b_index])  
+        k_scratch_ref[b_index] = (k_scratch_ref[b_index] * jnp.exp(g_last[None, :] - gk_scratch_ref[b_index])).astype(gk_scratch_ref[b_index].dtype)
+    b_h = b_h + jax.lax.dot(k_scratch_ref[b_index].T, v_scratch_ref[b_index])  
 
     if ht_ref is not None:
         ht_ref[0, 0] = b_h
@@ -467,13 +466,19 @@ def chunk_fwd_h_kernel_with_same_seq(
         pl.BlockSpec((1, 1, T, BK), k_index_map),
         pl.BlockSpec((1, 1, T, BV), v_index_map),
     ]
+    k_scratch = pltpu.VMEM((2, BT, BK), jnp.float32)
+    v_scratch = pltpu.VMEM((2, BT, BV), jnp.float32)
+    scratch_shapes = [k_scratch, v_scratch]
     if h0 is not None:
         in_specs.append(pl.BlockSpec((1, 1, BK, BV), h0_index_map))
     else:
         in_specs.append(None)
     if gk is not None:
         in_specs.append(pl.BlockSpec((1, 1, T, BK), gk_index_map))
+        gk_scratch = pltpu.VMEM((2, BT, BK), jnp.float32)
+        scratch_shapes.append(gk_scratch)
     else:
+        scratch_shapes.append(None)
         in_specs.append(None)
 
     kernel = functools.partial(
@@ -492,7 +497,7 @@ def chunk_fwd_h_kernel_with_same_seq(
               # DMA semaphores are allocated in scratch memory.
               # We allocated one semaphore for a local HBM-VMEM copy,
               # and one for the remote send semaphore.
-              [pltpu.SemaphoreType.DMA] * 6
+              scratch_shapes.extend([pltpu.SemaphoreType.DMA] * 6)
               # We additionally allocate one receive semaphore per device.
               # This is to avoid situations where we have multiple
               # DMAs in flight, as we do not want to share a receive
