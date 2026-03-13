@@ -243,6 +243,12 @@ def _chunk_fwd_h_kernel_with_same_seq(
     gk_ref,  # [1, 1, T, BK]
     h_ref,  # [1, NS, 1, BK, BV]
     ht_ref,  # [1, 1, BK , BV]
+    local_copy_sem0,
+    local_copy_sem1,
+    local_copy_sem2,
+    local_copy_sem3,
+    local_copy_sem4,
+    local_copy_sem5,
     *,
     BT,
     BS,
@@ -262,23 +268,27 @@ def _chunk_fwd_h_kernel_with_same_seq(
 
     copy_k0 = pltpu.make_async_copy(
         k_ref[(0, 0,  pl.dslice(0, BT), slice(None))],
-        k[0]
+        k[0],
+        local_copy_sem0,
     )
     copy_k0.start()
     copy_k1 = pltpu.make_async_copy(
         k_ref[(0, 0,  pl.dslice(BT, BT), slice(None))],
-        k[1]
+        k[1],
+        local_copy_sem1,
     )
     copy_k1.start()
 
     copy_v0 = pltpu.make_async_copy(
         v_ref[(0, 0,  pl.dslice(0, BT), slice(None))],
-        v[0]
+        v[0],
+        local_copy_sem2,
     )
     copy_v0.start()
     copy_v1 = pltpu.make_async_copy(
         v_ref[(0, 0,  pl.dslice(BT, BT), slice(None))],
-        v[1]
+        v[1],
+        local_copy_sem3,
     )
     copy_v1.start()
 
@@ -286,12 +296,14 @@ def _chunk_fwd_h_kernel_with_same_seq(
         gk = pl.empty((2, BT, BK), gk_ref.dtype)
         copy_gk0 = pltpu.make_async_copy(
             gk_ref[(0, 0,  pl.dslice(0, BT), slice(None))],
-            gk[0]
+            gk[0],
+            local_copy_sem4,
         )
         copy_gk0.start()
         copy_gk1 = pltpu.make_async_copy(
             gk_ref[(0, 0,  pl.dslice(jnp.minimum(BT, T-BT), BT), slice(None))],
-            gk[1]
+            gk[1],
+            local_copy_sem5,
         )
         copy_gk1.start()
 
@@ -326,19 +338,22 @@ def _chunk_fwd_h_kernel_with_same_seq(
 
         copy_k0 = pltpu.make_async_copy(
             k_ref[(0, 0,  pl.dslice(t0, BT), slice(None))],
-            k[b_index]
+            k[b_index],
+            local_copy_sem0,
         )
         copy_k0.start()
         copy_v0 = pltpu.make_async_copy(
             v_ref[(0, 0,  pl.dslice(t0, BT), slice(None))],
-            v[b_index]
+            v[b_index],
+            local_copy_sem1,
         )
         copy_v0.start()
 
         if gk_ref is not None:
             copy_gk0 = pltpu.make_async_copy(
                 gk_ref[(0, 0,  pl.dslice(t0, BT), slice(None))],
-                gk[b_index]
+                gk[b_index],
+                local_copy_sem2,
             )
             copy_gk0.start()
         else:
@@ -473,6 +488,16 @@ def chunk_fwd_h_kernel_with_same_seq(
             grid=grid,
             in_specs=in_specs,
             out_specs=out_specs,
+            scratch_shapes=(
+              # DMA semaphores are allocated in scratch memory.
+              # We allocated one semaphore for a local HBM-VMEM copy,
+              # and one for the remote send semaphore.
+              [pltpu.SemaphoreType.DMA] * 6
+              # We additionally allocate one receive semaphore per device.
+              # This is to avoid situations where we have multiple
+              # DMAs in flight, as we do not want to share a receive
+              # semaphore between the DMAs.
+            )
         ),
         out_shape=out_shape,
         interpret=interpret,
