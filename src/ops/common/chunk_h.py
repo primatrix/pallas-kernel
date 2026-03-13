@@ -315,3 +315,94 @@ def chunk_fwd_h_ref(
             ht = ht.at[i_n].set(h.astype(ht.dtype))
 
     return h_all, ht
+
+
+def chunk_bwd_dh_ref(
+    q: jax.Array,
+    k: jax.Array,
+    v: jax.Array,
+    gk: jax.Array,
+    do: jax.Array,
+    h0: jax.Array | None = None,
+    dht: jax.Array | None = None,
+    scale: float = 1.0,
+    cu_seqlens_cpu: jax.Array | None = None,
+    chunk_size: int = 64,
+) -> tuple[jax.Array, jax.Array | None]:
+    """Backward hidden state gradient propagation.
+
+    Propagates gradients backward through chunks to compute dh at each
+    chunk boundary and dh0.
+
+    Args:
+        q:   [B, T, H, K] — queries
+        k:   [B, T, H, K] — keys
+        v:   [B, T, H, V] — values
+        gk:  [B, T, H, K] — chunk-local cumsum of gates
+        do:  [B, T, H, V] — output gradient
+        h0:  [N, H, K, V] — initial hidden state (optional)
+        dht: [N, H, K, V] — terminal state gradient (optional)
+        scale: scaling factor
+        cu_seqlens_cpu: unused, kept for interface compatibility
+        chunk_size: block size
+
+    Returns:
+        dh:  [B, NT, H, K, V] — gradient at start of each chunk
+        dh0: [N, H, K, V] or None — initial state gradient
+    """
+    B, T, H, K = q.shape
+    V = v.shape[-1]
+    C = chunk_size
+    NT = T // C
+    N = B if cu_seqlens_cpu is None else cu_seqlens_cpu.shape[-1] - 1
+    assert T % C == 0, "T must be a multiple of chunk_size for chunk_bwd_dh"
+    is_varlen = cu_seqlens_cpu is not None
+
+    q = q.reshape(-1, H, K)
+    do = do.reshape(-1, H, V)
+    gk = gk.reshape(-1, H, K) if gk is not None else None
+
+    dh_all = jnp.zeros([B, NT, H, K, V], dtype=jnp.float32)
+    dh0_all = jnp.zeros([N, H, K, V], dtype=jnp.float32) if (h0 is not None or dht is not None) else None
+
+    for i_n in range(N):
+        if not is_varlen:
+            bos = i_n * T
+            eos = (i_n + 1) * T
+        else:
+            bos = int(cu_seqlens_cpu[i_n])
+            eos = int(cu_seqlens_cpu[i_n + 1])
+
+        NT_seq = (eos - bos) // C
+        dh = jnp.zeros((H, K, V), dtype=jnp.float32)
+        if dht is not None:
+            dh = dh + dht[i_n].astype(jnp.float32)
+
+        for i_t in range(NT_seq - 1, -1, -1):
+            bi = 0 if is_varlen else i_n
+            ti = bos // C + i_t if is_varlen else i_t
+            dh_all = dh_all.at[bi, ti].set(dh)
+
+            b_q = q[bos + i_t * C : bos + (i_t + 1) * C]   # [C, H, K]
+            b_do = do[bos + i_t * C : bos + (i_t + 1) * C]  # [C, H, V]
+
+            if gk is not None:
+                b_gk = gk[bos + i_t * C : bos + (i_t + 1) * C]  # [C, H, K]
+                b_gk_last = b_gk[-1]  # [H, K]
+                b_q_hat = b_q * jnp.exp(b_gk) * scale  # [C, H, K]
+                dh = dh * jnp.exp(b_gk_last[:, :, None])
+            else:
+                b_q_hat = b_q * scale
+
+            # contract over C (dim 0) and H (dim 1): [C,H,K]^T @ [C,H,V] -> [H,K,V]
+            dh = dh + lax.dot_general(
+                b_q_hat, b_do,
+                dimension_numbers=(((0,), (0,)), ((1,), (1,))),
+                precision=lax.Precision.HIGHEST,
+                preferred_element_type=jnp.float32,
+            )
+
+        if dh0_all is not None:
+            dh0_all = dh0_all.at[i_n].set(dh)
+
+    return dh_all, dh0_all

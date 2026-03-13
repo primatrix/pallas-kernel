@@ -6,7 +6,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
 
 import torch
 
-from tests.src.ops.common.fused_recurrent import fused_recurrent
+from tests.src.ops.common.fused_recurrent import fused_recurrent, fused_recurrent_bwd
 
 
 def fused_recurrent_gla(
@@ -53,3 +53,42 @@ def fused_recurrent_gla(
         reverse=reverse,
         cu_seqlens=cu_seqlens,
     )
+
+
+def fused_recurrent_gla_bwd(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    gk: torch.Tensor | None = None,
+    gv: torch.Tensor | None = None,
+    o: torch.Tensor | None = None,
+    do: torch.Tensor | None = None,
+    dht: torch.Tensor | None = None,
+    scale: float | None = None,
+    initial_state: torch.Tensor | None = None,
+    reverse: bool = False,
+    cu_seqlens: torch.LongTensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor,
+           torch.Tensor | None, torch.Tensor | None, torch.Tensor | None]:
+    """Backward for fused recurrent GLA — Torch CPU reference.
+
+    Returns:
+        dq, dk, dv, dgk, dgv, dh0
+    """
+    if scale is None:
+        scale = q.shape[-1] ** -0.5
+    dq, dk, dv, _dg, dgk, dgv, dh0 = fused_recurrent_bwd(
+        q=q,
+        k=k,
+        v=v,
+        gk=gk,
+        gv=gv,
+        o=o,
+        do=do,
+        dht=dht,
+        scale=scale,
+        initial_state=initial_state,
+        reverse=reverse,
+        cu_seqlens=cu_seqlens,
+    )
+    return dq, dk, dv, dgk, dgv, dh0
