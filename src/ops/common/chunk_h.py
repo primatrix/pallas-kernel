@@ -387,7 +387,7 @@ def chunk_fwd_h_kernel_with_same_seq(
         in_specs.append(None)
 
     kernel = functools.partial(
-        _chunk_fwd_h_kernel,
+        _chunk_fwd_h_kernel_with_same_seq,
         BT=BT,
         BS=BS,
     )
