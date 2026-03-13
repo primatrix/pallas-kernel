@@ -268,10 +268,10 @@ def _chunk_fwd_h_kernel_with_same_seq(
 
         lax.cond((i_t % NTS) == 0, store_fn, lambda _: None, operand=None)
 
-        k = k_ref[(0, pl.dslice(t0, BT), slice(None))]  # [BT,BK]
-        v = v_ref[(0, pl.dslice(t0, BT), slice(None))]  # [BT,BV]
+        k = k_ref[(0, 0,  pl.dslice(t0, BT), slice(None))]  # [BT,BK]
+        v = v_ref[(0, 0,  pl.dslice(t0, BT), slice(None))]  # [BT,BV]
         if gk_ref is not None:
-            gk = gk_ref[(0, pl.dslice(t0, BT), slice(None))]  # [BT,BK]
+            gk = gk_ref[(0, 0,  pl.dslice(t0, BT), slice(None))]  # [BT,BK]
             g_last = gk[-1, :]
             decay = jnp.exp(g_last)
             b_h = b_h * decay[:, None]  # [BK, BV] * [BK,1]
