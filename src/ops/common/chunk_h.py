@@ -257,18 +257,23 @@ def _chunk_fwd_h_kernel_with_same_seq(
         b_h = h0_ref[0, 0]
     
     curr_k = k_ref[(0, 0,  pl.dslice(0, BT), slice(None))]
+    next_k = k_ref[(0, 0,  pl.dslice(BT, BT), slice(None))]
     curr_v = v_ref[(0, 0,  pl.dslice(0, BT), slice(None))]
+    next_v = v_ref[(0, 0,  pl.dslice(BT, BT), slice(None))]
+
     if gk_ref is not None:
         curr_gk = gk_ref[(0, 0,  pl.dslice(0, BT), slice(None))]
+        next_gk = gk_ref[(0, 0,  pl.dslice(0, BT), slice(None))]
     h_ref[0, 0, 0] = b_h
 
     def body(i_t, carry):
-        b_h, curr_k, curr_v, curr_gk = carry
-        t0 = i_t * BT
-        k_next = k_ref[(0, 0,  pl.dslice(t0, BT), slice(None))]  # [BT,BK]
-        v_next = v_ref[(0, 0,  pl.dslice(t0, BT), slice(None))]  # [BT,BV]
+        b_h, curr_k, curr_v, curr_gk, next_k, next_v, next_gk = carry
+        t0 = min((i_t + 1) * BT, T - BT)
+        
+        new_k = k_ref[(0, 0,  pl.dslice(t0, BT), slice(None))]  # [BT,BK]
+        new_v = v_ref[(0, 0,  pl.dslice(t0, BT), slice(None))]  # [BT,BV]
         if gk_ref is not None:
-            gk_next = gk_ref[(0, 0,  pl.dslice(t0, BT), slice(None))]  # [BT,BK]
+            new_gk = gk_ref[(0, 0,  pl.dslice(t0, BT), slice(None))]  # [BT,BK]
         if curr_gk is not None:
             g_last = curr_gk[-1, :]
             decay = jnp.exp(g_last)
@@ -284,9 +289,9 @@ def _chunk_fwd_h_kernel_with_same_seq(
 
         lax.cond((i_t % NTS) == 0, store_fn, lambda _: None, operand=None)        
 
-        return b_h, k_next, v_next, gk_next
+        return b_h, next_k, next_v, next_gk, new_k, new_v, new_gk
 
-    b_h, curr_k, curr_v, curr_gk = lax.fori_loop(1, NT, body, (b_h, curr_k, curr_v, curr_gk))
+    b_h, curr_k, curr_v, curr_gk, next_k, next_v, next_gk = lax.fori_loop(1, NT, body, (b_h, curr_k, curr_v, curr_gk, next_k, next_v, next_gk))
     if curr_gk is not None:
         g_last = curr_gk[-1, :]
         decay = jnp.exp(g_last)
