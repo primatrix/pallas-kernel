@@ -236,6 +236,188 @@ def chunk_fwd_h_kernel(
     return h, None
 
 
+def _chunk_fwd_h_kernel_with_same_seq(
+    k_ref,  # [1, 1, T, BK]
+    v_ref,  # [1, 1, T, BV]
+    h0_ref,  # [1, 1, BK, BV]
+    gk_ref,  # [1, 1, T, BK]
+    h_ref,  # [1, NS, 1, BK, BV]
+    ht_ref,  # [1, 1, BK , BV]
+    *,
+    BT,
+    BS,
+):
+    T, BK = k_ref.shape[2], k_ref.shape[3]
+    BV = v_ref.shape[2]
+    NT = pl.cdiv(T, BT)
+    NTS = BS // BT
+    b_h = jnp.zeros((BK, BV), dtype=jnp.float32)
+
+    if h0_ref is not None:
+        b_h = h0_ref[0, 0]
+    
+    def body(i_t, carry):
+        b_h = carry[0]
+        t0 = i_t * BT
+
+        i_s = i_t // NTS
+
+        def store_fn(_):
+            h_ref[0, i_s, 0] = b_h
+            return None
+
+        lax.cond((i_t % NTS) == 0, store_fn, lambda _: None, operand=None)
+
+        k = k_ref[(0, pl.dslice(t0, BT), slice(None))]  # [BT,BK]
+        v = v_ref[(0, pl.dslice(t0, BT), slice(None))]  # [BT,BV]
+        if gk_ref is not None:
+            gk = gk_ref[(0, pl.dslice(t0, BT), slice(None))]  # [BT,BK]
+            g_last = gk[-1, :]
+            decay = jnp.exp(g_last)
+            b_h = b_h * decay[:, None]  # [BK, BV] * [BK,1]
+            k = (k * jnp.exp(g_last[None, :] - gk)).astype(k.dtype)
+
+        # state update
+        b_h = b_h + jax.lax.dot(k.T, v)            
+
+        return (b_h,)
+
+    b_h = lax.fori_loop(0, NT, body, (b_h,))
+    if ht_ref is not None:
+        ht_ref[0, 0] = b_h
+
+
+@functools.partial(
+    jax.jit,
+    static_argnames=[
+        "output_final_state",
+        "chunk_size",
+        "split_size",
+        "states_in_fp32",
+        "interpret",
+    ],
+)
+def chunk_fwd_h_kernel_with_same_seq(
+    k: jax.Array,  # [B,T,H,K]
+    v: jax.Array,  # [B,T,H,V]
+    g: jax.Array | None = None,  # [B,T,H]
+    g_gamma: jax.Array | None = None,  # (H,)
+    gk: jax.Array | None = None,  # [B,T,H,K]
+    gv: jax.Array | None = None,  # [B,T,H,V]
+    h0: jax.Array | None = None,  # [N,H,K,V]
+    output_final_state: bool = False,
+    chunk_size: int = 128,
+    split_size: int | None = None,
+    states_in_fp32: bool = False,
+    interpret: bool = False,
+):
+    check_chunk_fwd(g)
+    check_chunk_fwd(gv)
+    check_chunk_fwd(g_gamma)
+    # todo: tune bk and bv for bast performance
+    BK = 128
+    BV = 128
+    B, T, H, K, V = *k.shape, v.shape[-1]
+    assert K % 128 == 0, "K % 128 must equal to 0."
+    assert V % 128 == 0, "V % 128 must equal to 0."
+    assert T % chunk_size == 0, "T mod chunk_size must equal to 0."
+
+    BT = chunk_size
+    BS = BT if split_size is None else split_size
+    assert BS % BT == 0, (
+        f"The `split_size` (got {BS}) must be a multiple of `chunk_size` {BT}"
+    )
+    # N: the actual number of sequences in the batch with either equal or variable lengths
+
+    N, NS = (
+        B,
+        T // BS,
+    )  # split_offsets[-1] # NS number of chunk_size
+
+
+    k = jnp.transpose(k, (0, 2, 1, 3))  # (B,H,T,K)
+    v = jnp.transpose(v, (0, 2, 1, 3))  # (B,H,T,V)
+    if gk is not None:
+        gk = jnp.transpose(gk, (0, 2, 1, 3))  # (B,H,T,K)
+
+    grid = (B , H, pl.cdiv(K, BK), pl.cdiv(V, BV))
+
+    def k_index_map(batch_index, head_index, k_index, _):
+        return batch_index, head_index, 0, k_index
+
+    def gk_index_map(batch_index, head_index, k_index, _):
+        return batch_index, head_index, 0, k_index
+
+    def v_index_map(batch_index, head_index, _, v_index):
+        return batch_index, head_index, 0, v_index
+
+    def h0_index_map(batch_index, head_index, k_index, v_index):
+        return batch_index, head_index, k_index, v_index
+
+    def h_index_map(batch_index, head_index, k_index, v_index):
+        return batch_index, head_index, k_index, v_index
+
+    def ht_index_map(batch_index, head_index, k_index, v_index):
+        return batch_index, head_index, k_index, v_index
+
+    out_shape = [
+        jax.ShapeDtypeStruct(
+            shape=(N, NS, H, K, V), dtype=k.dtype if not states_in_fp32 else jnp.float32
+        )
+    ]
+    out_specs = [pl.BlockSpec((1, NS, 1, BK, BV), ht_index_map)]
+    if output_final_state:
+        out_shape.append(jax.ShapeDtypeStruct(shape=(N, H, K, V), dtype=k.dtype))
+        out_specs.append(pl.BlockSpec((1, 1, BK, BV), h_index_map))
+    else:
+        out_shape.append(None)
+        out_specs.append(None)
+
+    in_specs = [
+        pl.BlockSpec((1, 1, T, BK), k_index_map),
+        pl.BlockSpec((1, 1, T, BV), v_index_map),
+    ]
+    if h0 is not None:
+        in_specs.append(pl.BlockSpec((1, 1, BK, BV), h0_index_map))
+    else:
+        in_specs.append(None)
+    if gk is not None:
+        in_specs.append(pl.BlockSpec((1, 1, T, BK), gk_index_map))
+    else:
+        in_specs.append(None)
+
+    in_specs.append(pl.BlockSpec(memory_space=pltpu.SMEM))
+    in_specs.append(pl.BlockSpec(memory_space=pltpu.SMEM))
+    kernel = functools.partial(
+        _chunk_fwd_h_kernel,
+        BT=BT,
+        BS=BS,
+    )
+    h, ht = pl.pallas_call(
+        kernel,
+        grid_spec=pltpu.PrefetchScalarGridSpec(
+            num_scalar_prefetch=0,
+            grid=grid,
+            in_specs=in_specs,
+            out_specs=out_specs,
+        ),
+        out_shape=out_shape,
+        interpret=interpret,
+        compiler_params=pltpu.CompilerParams(
+            dimension_semantics=(
+                "parallel",
+                "parallel",
+                "arbitrary",
+                "arbitrary",
+            ),
+            vmem_limit_bytes=128 * 1024 * 1024,
+        ),
+    )(k, v, h0, gk)
+    if output_final_state:
+        return h, ht
+    return h, None
+
+
 def chunk_fwd_h_ref(
     k: jax.Array,
     v: jax.Array,
