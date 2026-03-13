@@ -288,8 +288,8 @@ def _chunk_fwd_h_kernel_with_same_seq(
 
     def body(i_t, carry):
         b_h = carry
-        copy_k0.wait()
-        copy_v0.wait()
+        local_copy_sem0.wait()
+        local_copy_sem1.wait()
         
         buf = jnp.mod(i_t , 2)
         next_buf = jnp.mod(i_t + 1,  2)
@@ -318,7 +318,7 @@ def _chunk_fwd_h_kernel_with_same_seq(
                 copy_gk0.start()   
         
         if gk_ref is not None:
-            copy_gk0.wait()
+            local_copy_sem2.wait()
             lax.cond(i_t + 1 < NT, lambda _: do_prefetch(), lambda _:None, None)
             g_last = gk_scratch_ref[buf][-1, :]
             decay = jnp.exp(g_last)
