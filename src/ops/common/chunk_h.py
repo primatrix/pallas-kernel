@@ -268,7 +268,7 @@ def _chunk_fwd_h_kernel_with_same_seq(
 
     def body(i_t, carry):
         b_h, curr_k, curr_v, curr_gk, next_k, next_v, next_gk = carry
-        t0 = min((i_t + 1) * BT, T - BT)
+        t0 = jnp.min((i_t + 1) * BT, T - BT)
         
         new_k = k_ref[(0, 0,  pl.dslice(t0, BT), slice(None))]  # [BT,BK]
         new_v = v_ref[(0, 0,  pl.dslice(t0, BT), slice(None))]  # [BT,BV]
