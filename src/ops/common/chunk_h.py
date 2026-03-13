@@ -386,8 +386,6 @@ def chunk_fwd_h_kernel_with_same_seq(
     else:
         in_specs.append(None)
 
-    in_specs.append(pl.BlockSpec(memory_space=pltpu.SMEM))
-    in_specs.append(pl.BlockSpec(memory_space=pltpu.SMEM))
     kernel = functools.partial(
         _chunk_fwd_h_kernel,
         BT=BT,
