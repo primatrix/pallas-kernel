@@ -249,9 +249,6 @@ def _chunk_fwd_h_kernel_with_same_seq(
     local_copy_sem0,
     local_copy_sem1,
     local_copy_sem2,
-    local_copy_sem3,
-    local_copy_sem4,
-    local_copy_sem5,
     *,
     BT,
     BS,
@@ -271,40 +268,22 @@ def _chunk_fwd_h_kernel_with_same_seq(
         local_copy_sem0,
     )
     copy_k0.start()
-    copy_k1 = pltpu.make_async_copy(
-        k_ref.at[(0, 0,  pl.dslice(BT, BT), slice(None))],
-        k_scratch_ref.at[1],
-        local_copy_sem1,
-    )
-    copy_k1.start()
 
     copy_v0 = pltpu.make_async_copy(
         v_ref.at[(0, 0,  pl.dslice(0, BT), slice(None))],
         v_scratch_ref.at[0],
-        local_copy_sem2,
+        local_copy_sem1,
     )
     copy_v0.start()
-    copy_v1 = pltpu.make_async_copy(
-        v_ref.at[(0, 0,  pl.dslice(BT, BT), slice(None))],
-        v_scratch_ref.at[1],
-        local_copy_sem3,
-    )
-    copy_v1.start()
 
     if gk_ref is not None:
         gk = pl.empty((2, BT, BK), gk_ref.dtype)
         copy_gk0 = pltpu.make_async_copy(
             gk_ref.at[(0, 0,  pl.dslice(0, BT), slice(None))],
             gk_scratch_ref.at[0],
-            local_copy_sem4,
+            local_copy_sem2,
         )
         copy_gk0.start()
-        copy_gk1 = pltpu.make_async_copy(
-            gk_ref.at[(0, 0,  pl.dslice(jnp.minimum(BT, T-BT), BT), slice(None))],
-            gk_scratch_ref.at[1],
-            local_copy_sem5,
-        )
-        copy_gk1.start()
 
     else:
         gk = None
@@ -312,65 +291,57 @@ def _chunk_fwd_h_kernel_with_same_seq(
     h_ref[0, 0, 0] = b_h
 
     def body(i_t, carry):
-        b_h, copy_k0, copy_v0, copy_gk0, copy_k1, copy_v1, copy_gk1 = carry
-    
+        b_h = carry
         copy_k0.wait()
         copy_v0.wait()
         
-        b_index = jnp.mod(i_t - 1, 2)
-        if copy_gk0 is not None:
+        buf = jnp.mod(i_t , 2)
+        next_buf = jnp.mod(i_t + 1,  2)
+
+        def do_prefetch():
+            t0 = (i_t + 1) * BT
+            copy_k0 = pltpu.make_async_copy(
+                k_ref.at[(0, 0,  pl.dslice(t0, BT), slice(None))],
+                k_scratch_ref.at[next_buf],
+                local_copy_sem0,
+            )
+            copy_k0.start()
+            copy_v0 = pltpu.make_async_copy(
+                v_ref.at[(0, 0,  pl.dslice(t0, BT), slice(None))],
+                v_scratch_ref.at[next_buf],
+                local_copy_sem1,
+            )
+            copy_v0.start()
+
+            if gk_ref is not None:
+                copy_gk0 = pltpu.make_async_copy(
+                    gk_ref.at[(0, 0,  pl.dslice(t0, BT), slice(None))],
+                    gk_scratch_ref.at[next_buf],
+                    local_copy_sem2,
+                )
+                copy_gk0.start()
+            else:
+                copy_gk0 = None    
+        
+        if gk_ref is not None:
             copy_gk0.wait()
-            g_last = gk_scratch_ref[b_index][-1, :]
+            do_prefetch()
+            g_last = gk_scratch_ref[buf][-1, :]
             decay = jnp.exp(g_last)
             b_h = b_h * decay[:, None]  # [BK, BV] * [BK,1]
-            k_scratch_ref[b_index] = (k_scratch_ref[b_index] * jnp.exp(g_last[None, :] - gk_scratch_ref[b_index])).astype(gk_scratch_ref[b_index].dtype)
-        
-        b_h = b_h + jax.lax.dot(k_scratch_ref[b_index].T, v_scratch_ref[b_index])      
+            k_scratch_ref[buf] = (k_scratch_ref[buf] * jnp.exp(g_last[None, :] - gk_scratch_ref[buf])).astype(gk_scratch_ref[buf].dtype)
+        else:
+            do_prefetch()
+        b_h = b_h + jax.lax.dot(k_scratch_ref[buf].T, v_scratch_ref[buf])      
         i_s = i_t // NTS
 
         def store_fn(_):
             h_ref[0, i_s, 0] = b_h
             return None
         lax.cond((i_t % NTS) == 0, store_fn, lambda _: None, operand=None)   
+        return b_h
 
-        t0 = (i_t + 1) * BT
-
-        copy_k0 = pltpu.make_async_copy(
-            k_ref.at[(0, 0,  pl.dslice(t0, BT), slice(None))],
-            k_scratch_ref.at[b_index],
-            local_copy_sem0,
-        )
-        copy_k0.start()
-        copy_v0 = pltpu.make_async_copy(
-            v_ref.at[(0, 0,  pl.dslice(t0, BT), slice(None))],
-            v_scratch_ref.at[b_index],
-            local_copy_sem1,
-        )
-        copy_v0.start()
-
-        if gk_ref is not None:
-            copy_gk0 = pltpu.make_async_copy(
-                gk_ref.at[(0, 0,  pl.dslice(t0, BT), slice(None))],
-                gk_scratch_ref.at[b_index],
-                local_copy_sem2,
-            )
-            copy_gk0.start()
-        else:
-            copy_gk0 = None    
-
-        return b_h, copy_k1, copy_v1, copy_gk1, copy_k0, copy_v0, copy_gk0
-
-    b_h, copy_k0, copy_v0, copy_gk0, copy_k1, copy_v1, copy_gk1 = lax.fori_loop(1, NT, body, (b_h, copy_k0, copy_v0, copy_gk0, copy_k1, copy_v1, copy_gk1))
-    b_index = jnp.mod(NT - 1, 2)
-    copy_k0.wait()
-    copy_v0.wait()
-    if copy_gk0 is not None:
-        copy_gk0.wait()
-        g_last = gk_scratch_ref[b_index][-1, :]
-        decay = jnp.exp(g_last)
-        b_h = b_h * decay[:, None]  # [BK, BV] * [BK,1]
-        k_scratch_ref[b_index] = (k_scratch_ref[b_index] * jnp.exp(g_last[None, :] - gk_scratch_ref[b_index])).astype(gk_scratch_ref[b_index].dtype)
-    b_h = b_h + jax.lax.dot(k_scratch_ref[b_index].T, v_scratch_ref[b_index])  
+    b_h = lax.fori_loop(0, NT, body, b_h)
 
     if ht_ref is not None:
         ht_ref[0, 0] = b_h
@@ -486,7 +457,7 @@ def chunk_fwd_h_kernel_with_same_seq(
         BT=BT,
         BS=BS,
     )
-    scratch_shapes.extend([pltpu.SemaphoreType.DMA] * 6)
+    scratch_shapes.extend([pltpu.SemaphoreType.DMA] * 3)
     h, ht = pl.pallas_call(
         kernel,
         grid_spec=pltpu.PrefetchScalarGridSpec(
