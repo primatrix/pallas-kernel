@@ -264,11 +264,11 @@ def _chunk_fwd_h_kernel_with_same_seq(
 
     def body(i_t, carry):
         b_h, curr_k, curr_v, curr_gk = carry
+        t0 = i_t * BT
         k_next = k_ref[(0, 0,  pl.dslice(t0, BT), slice(None))]  # [BT,BK]
         v_next = v_ref[(0, 0,  pl.dslice(t0, BT), slice(None))]  # [BT,BV]
         if gk_ref is not None:
             gk_next = gk_ref[(0, 0,  pl.dslice(t0, BT), slice(None))]  # [BT,BK]
-        t0 = i_t * BT
         if curr_gk is not None:
             g_last = curr_gk[-1, :]
             decay = jnp.exp(g_last)
