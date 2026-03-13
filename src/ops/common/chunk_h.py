@@ -266,27 +266,27 @@ def _chunk_fwd_h_kernel_with_same_seq(
         b_h = h0_ref[0, 0]
 
     copy_k0 = pltpu.make_async_copy(
-        k_ref[(0, 0,  pl.dslice(0, BT), slice(None))],
-        k_scratch_ref[0],
+        k_ref.at[(0, 0,  pl.dslice(0, BT), slice(None))],
+        k_scratch_ref.at[0],
         local_copy_sem0,
     )
     copy_k0.start()
     copy_k1 = pltpu.make_async_copy(
-        k_ref[(0, 0,  pl.dslice(BT, BT), slice(None))],
-        k_scratch_ref[1],
+        k_ref.at[(0, 0,  pl.dslice(BT, BT), slice(None))],
+        k_scratch_ref.at[1],
         local_copy_sem1,
     )
     copy_k1.start()
 
     copy_v0 = pltpu.make_async_copy(
-        v_ref[(0, 0,  pl.dslice(0, BT), slice(None))],
-        v_scratch_ref[0],
+        v_ref.at[(0, 0,  pl.dslice(0, BT), slice(None))],
+        v_scratch_ref.at[0],
         local_copy_sem2,
     )
     copy_v0.start()
     copy_v1 = pltpu.make_async_copy(
-        v_ref[(0, 0,  pl.dslice(BT, BT), slice(None))],
-        v_scratch_ref[1],
+        v_ref.at[(0, 0,  pl.dslice(BT, BT), slice(None))],
+        v_scratch_ref.at[1],
         local_copy_sem3,
     )
     copy_v1.start()
@@ -294,14 +294,14 @@ def _chunk_fwd_h_kernel_with_same_seq(
     if gk_ref is not None:
         gk = pl.empty((2, BT, BK), gk_ref.dtype)
         copy_gk0 = pltpu.make_async_copy(
-            gk_ref[(0, 0,  pl.dslice(0, BT), slice(None))],
-            gk_scratch_ref[0],
+            gk_ref.at[(0, 0,  pl.dslice(0, BT), slice(None))],
+            gk_scratch_ref.at[0],
             local_copy_sem4,
         )
         copy_gk0.start()
         copy_gk1 = pltpu.make_async_copy(
-            gk_ref[(0, 0,  pl.dslice(jnp.minimum(BT, T-BT), BT), slice(None))],
-            gk_scratch_ref[1],
+            gk_ref.at[(0, 0,  pl.dslice(jnp.minimum(BT, T-BT), BT), slice(None))],
+            gk_scratch_ref.at[1],
             local_copy_sem5,
         )
         copy_gk1.start()
@@ -336,22 +336,22 @@ def _chunk_fwd_h_kernel_with_same_seq(
         t0 = (i_t + 1) * BT
 
         copy_k0 = pltpu.make_async_copy(
-            k_ref[(0, 0,  pl.dslice(t0, BT), slice(None))],
-            k_scratch_ref[b_index],
+            k_ref.at[(0, 0,  pl.dslice(t0, BT), slice(None))],
+            k_scratch_ref.at[b_index],
             local_copy_sem0,
         )
         copy_k0.start()
         copy_v0 = pltpu.make_async_copy(
-            v_ref[(0, 0,  pl.dslice(t0, BT), slice(None))],
-            v_scratch_ref[b_index],
+            v_ref.at[(0, 0,  pl.dslice(t0, BT), slice(None))],
+            v_scratch_ref.at[b_index],
             local_copy_sem1,
         )
         copy_v0.start()
 
         if gk_ref is not None:
             copy_gk0 = pltpu.make_async_copy(
-                gk_ref[(0, 0,  pl.dslice(t0, BT), slice(None))],
-                gk_scratch_ref[b_index],
+                gk_ref.at[(0, 0,  pl.dslice(t0, BT), slice(None))],
+                gk_scratch_ref.at[b_index],
                 local_copy_sem2,
             )
             copy_gk0.start()
