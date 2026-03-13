@@ -277,16 +277,12 @@ def _chunk_fwd_h_kernel_with_same_seq(
     copy_v0.start()
 
     if gk_ref is not None:
-        gk = pl.empty((2, BT, BK), gk_ref.dtype)
         copy_gk0 = pltpu.make_async_copy(
             gk_ref.at[(0, 0,  pl.dslice(0, BT), slice(None))],
             gk_scratch_ref.at[0],
             local_copy_sem2,
         )
         copy_gk0.start()
-
-    else:
-        gk = None
 
     h_ref[0, 0, 0] = b_h
 
@@ -319,19 +315,17 @@ def _chunk_fwd_h_kernel_with_same_seq(
                     gk_scratch_ref.at[next_buf],
                     local_copy_sem2,
                 )
-                copy_gk0.start()
-            else:
-                copy_gk0 = None    
+                copy_gk0.start()   
         
         if gk_ref is not None:
             copy_gk0.wait()
-            do_prefetch()
+            lax.cond(i_t + 1 < NT, lambda _: do_prefetch(), lambda _:None, None)
             g_last = gk_scratch_ref[buf][-1, :]
             decay = jnp.exp(g_last)
             b_h = b_h * decay[:, None]  # [BK, BV] * [BK,1]
             k_scratch_ref[buf] = (k_scratch_ref[buf] * jnp.exp(g_last[None, :] - gk_scratch_ref[buf])).astype(gk_scratch_ref[buf].dtype)
         else:
-            do_prefetch()
+            lax.cond(i_t + 1 < NT, lambda _: do_prefetch(), lambda _:None, None)
         b_h = b_h + jax.lax.dot(k_scratch_ref[buf].T, v_scratch_ref[buf])      
         i_s = i_t // NTS
 
