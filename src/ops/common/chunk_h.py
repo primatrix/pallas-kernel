@@ -193,15 +193,15 @@ def chunk_fwd_h_kernel(
         out_specs.append(None)
 
     in_specs = [
-        pl.BlockSpec((1, T_sum, BK), k_index_map),
-        pl.BlockSpec((1, T_sum, BV), v_index_map),
+        pl.BlockSpec((1, T_sum, BK), k_index_map, memory_space=pltpu.VMEM),
+        pl.BlockSpec((1, T_sum, BV), v_index_map, memory_space=pltpu.VMEM),
     ]
     if h0 is not None:
-        in_specs.append(pl.BlockSpec((N, 1, BK, BV), h0_index_map))
+        in_specs.append(pl.BlockSpec((N, 1, BK, BV), h0_index_map, memory_space=pltpu.VMEM))
     else:
         in_specs.append(None)
     if gk is not None:
-        in_specs.append(pl.BlockSpec((1, T_sum, BK), gk_index_map))
+        in_specs.append(pl.BlockSpec((1, T_sum, BK), gk_index_map,  memory_space=pltpu.VMEM))
     else:
         in_specs.append(None)
 
