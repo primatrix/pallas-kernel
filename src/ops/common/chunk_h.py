@@ -256,29 +256,65 @@ def _chunk_fwd_h_kernel_with_same_seq(
     if h0_ref is not None:
         b_h = h0_ref[0, 0]
     
-    curr_k = k_ref[(0, 0,  pl.dslice(0, BT), slice(None))]
-    next_k = k_ref[(0, 0,  pl.dslice(BT, BT), slice(None))]
-    curr_v = v_ref[(0, 0,  pl.dslice(0, BT), slice(None))]
-    next_v = v_ref[(0, 0,  pl.dslice(BT, BT), slice(None))]
+    k = pl.empty((2, BT, BK), k_ref.dtype)
+
+    v = pl.empty((2, BT, BV), v_ref.dtype)
+
+    copy_k0 = pltpu.make_async_copy(
+        k_ref[(0, 0,  pl.dslice(0, BT), slice(None))],
+        k[0]
+    )
+    copy_k0.start()
+    copy_k1 = pltpu.make_async_copy(
+        k_ref[(0, 0,  pl.dslice(BT, BT), slice(None))],
+        k[1]
+    )
+    copy_k1.start()
+
+    copy_v0 = pltpu.make_async_copy(
+        v_ref[(0, 0,  pl.dslice(0, BT), slice(None))],
+        v[0]
+    )
+    copy_v0.start()
+    copy_v1 = pltpu.make_async_copy(
+        v_ref[(0, 0,  pl.dslice(BT, BT), slice(None))],
+        v[1]
+    )
+    copy_v1.start()
 
     if gk_ref is not None:
-        curr_gk = gk_ref[(0, 0,  pl.dslice(0, BT), slice(None))]
-        next_gk = gk_ref[(0, 0,  pl.dslice(jnp.minimum(BT, T-BT), BT), slice(None))]
+        gk = pl.empty((2, BT, BK), gk_ref.dtype)
+        copy_gk0 = pltpu.make_async_copy(
+            gk_ref[(0, 0,  pl.dslice(0, BT), slice(None))],
+            gk[0]
+        )
+        copy_gk0.start()
+        copy_gk1 = pltpu.make_async_copy(
+            gk_ref[(0, 0,  pl.dslice(jnp.minimum(BT, T-BT), BT), slice(None))],
+            gk[1]
+        )
+        copy_gk1.start()
+
     else:
-        curr_gk = None
-        next_gk = None
+        gk = None
+
     h_ref[0, 0, 0] = b_h
 
     def body(i_t, carry):
-        b_h, curr_k, curr_v, curr_gk, next_k, next_v, next_gk = carry
+        b_h, copy_k0, copy_v0, copy_gk0, copy_k1, copy_v1, copy_gk1 = carry
     
-        if curr_gk is not None:
-            g_last = curr_gk[-1, :]
+        copy_k0.wait()
+        copy_v0.wait()
+        
+        b_index = jnp.mod(i_t - 1, 2)
+        if copy_gk0 is not None:
+            copy_gk0.wait()
+            g_last = gk[b_index][-1, :]
             decay = jnp.exp(g_last)
             b_h = b_h * decay[:, None]  # [BK, BV] * [BK,1]
-            curr_k = (curr_k * jnp.exp(g_last[None, :] - curr_gk)).astype(curr_gk.dtype)
+            k[b_index] = (k[b_index] * jnp.exp(g_last[None, :] - gk[b_index])).astype(gk[b_index].dtype)
         
-        b_h = b_h + jax.lax.dot(curr_k.T, curr_v)      
+        b_h = b_h + jax.lax.dot(k[b_index].T, v[b_index])      
         i_s = i_t // NTS
 
         def store_fn(_):
@@ -287,22 +323,40 @@ def _chunk_fwd_h_kernel_with_same_seq(
         lax.cond((i_t % NTS) == 0, store_fn, lambda _: None, operand=None)   
 
         t0 = (i_t + 1) * BT
-        new_k = k_ref[(0, 0,  pl.dslice(t0, BT), slice(None))]  # [BT,BK]
-        new_v = v_ref[(0, 0,  pl.dslice(t0, BT), slice(None))]  # [BT,BV]
+
+        copy_k0 = pltpu.make_async_copy(
+            k_ref[(0, 0,  pl.dslice(t0, BT), slice(None))],
+            k[b_index]
+        )
+        copy_k0.start()
+        copy_v0 = pltpu.make_async_copy(
+            v_ref[(0, 0,  pl.dslice(t0, BT), slice(None))],
+            v[b_index]
+        )
+        copy_v0.start()
+
         if gk_ref is not None:
-            new_gk = gk_ref[(0, 0,  pl.dslice(t0, BT), slice(None))]  # [BT,BK] 
+            copy_gk0 = pltpu.make_async_copy(
+                gk_ref[(0, 0,  pl.dslice(t0, BT), slice(None))],
+                gk[b_index]
+            )
+            copy_gk0.start()
         else:
-            new_gk = None    
+            copy_gk0 = None    
 
-        return b_h, next_k, next_v, next_gk, new_k, new_v, new_gk
+        return b_h, copy_k1, copy_v1, copy_gk1, copy_k0, copy_v0, copy_gk0
 
-    b_h, curr_k, curr_v, curr_gk, next_k, next_v, next_gk = lax.fori_loop(1, NT, body, (b_h, curr_k, curr_v, curr_gk, next_k, next_v, next_gk))
-    if curr_gk is not None:
-        g_last = curr_gk[-1, :]
+    b_h, copy_k0, copy_v0, copy_gk0, copy_k1, copy_v1, copy_gk1 = lax.fori_loop(1, NT, body, (b_h, copy_k0, copy_v0, copy_gk0, copy_k1, copy_v1, copy_gk1))
+    b_index = jnp.mod(NT - 1, 2)
+    copy_k0.wait()
+    copy_v0.wait()
+    if copy_gk0 is not None:
+        copy_gk0.wait()
+        g_last = gk[b_index][-1, :]
         decay = jnp.exp(g_last)
         b_h = b_h * decay[:, None]  # [BK, BV] * [BK,1]
-        curr_k = (curr_k * jnp.exp(g_last[None, :] - curr_gk)).astype(curr_gk.dtype)
-    b_h = b_h + jax.lax.dot(curr_k.T, curr_v)  
+        k[b_index] = (k[b_index] * jnp.exp(g_last[None, :] - gk[b_index])).astype(gk[b_index].dtype)
+    b_h = b_h + jax.lax.dot(k[b_index].T, v[b_index])  
 
     if ht_ref is not None:
         ht_ref[0, 0] = b_h
