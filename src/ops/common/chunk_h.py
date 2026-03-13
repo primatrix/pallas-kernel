@@ -257,7 +257,7 @@ def _chunk_fwd_h_kernel_with_same_seq(
         b_h = h0_ref[0, 0]
     
     def body(i_t, carry):
-        b_h = carry[0]
+        b_h = carry
         t0 = i_t * BT
 
         i_s = i_t // NTS
@@ -280,9 +280,9 @@ def _chunk_fwd_h_kernel_with_same_seq(
         # state update
         b_h = b_h + jax.lax.dot(k.T, v)            
 
-        return (b_h,)
+        return b_h
 
-    b_h = lax.fori_loop(0, NT, body, (b_h,))
+    b_h = lax.fori_loop(0, NT, body, b_h)
     if ht_ref is not None:
         ht_ref[0, 0] = b_h
 
