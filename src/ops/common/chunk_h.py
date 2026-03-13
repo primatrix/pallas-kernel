@@ -486,6 +486,7 @@ def chunk_fwd_h_kernel_with_same_seq(
         BT=BT,
         BS=BS,
     )
+    scratch_shapes.extend([pltpu.SemaphoreType.DMA] * 6)
     h, ht = pl.pallas_call(
         kernel,
         grid_spec=pltpu.PrefetchScalarGridSpec(
@@ -497,7 +498,7 @@ def chunk_fwd_h_kernel_with_same_seq(
               # DMA semaphores are allocated in scratch memory.
               # We allocated one semaphore for a local HBM-VMEM copy,
               # and one for the remote send semaphore.
-              scratch_shapes.extend([pltpu.SemaphoreType.DMA] * 6)
+              scratch_shapes
               # We additionally allocate one receive semaphore per device.
               # This is to avoid situations where we have multiple
               # DMAs in flight, as we do not want to share a receive
