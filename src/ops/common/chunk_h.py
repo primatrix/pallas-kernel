@@ -256,33 +256,46 @@ def _chunk_fwd_h_kernel_with_same_seq(
     if h0_ref is not None:
         b_h = h0_ref[0, 0]
     
+    curr_k = k_ref[(0, 0,  pl.dslice(0, BT), slice(None))]
+    curr_v = v_ref[(0, 0,  pl.dslice(0, BT), slice(None))]
+    if gk_ref is not None:
+        curr_gk = gk_ref[(0, 0,  pl.dslice(0, BT), slice(None))]
+    h_ref[0, 0, 0] = b_h
+
     def body(i_t, carry):
-        b_h = carry
+        b_h, curr_k, curr_v, curr_gk = carry
         t0 = i_t * BT
 
+        if curr_gk is not None:
+            g_last = curr_gk[-1, :]
+            decay = jnp.exp(g_last)
+            b_h = b_h * decay[:, None]  # [BK, BV] * [BK,1]
+            curr_k = (curr_k * jnp.exp(g_last[None, :] - curr_gk)).astype(curr_gk.dtype)
+        
+        b_h = b_h + jax.lax.dot(curr_k.T, curr_v)      
         i_s = i_t // NTS
 
         def store_fn(_):
             h_ref[0, i_s, 0] = b_h
             return None
 
-        lax.cond((i_t % NTS) == 0, store_fn, lambda _: None, operand=None)
+        lax.cond((i_t % NTS) == 0, store_fn, lambda _: None, operand=None)        
 
-        k = k_ref[(0, 0,  pl.dslice(t0, BT), slice(None))]  # [BT,BK]
-        v = v_ref[(0, 0,  pl.dslice(t0, BT), slice(None))]  # [BT,BV]
+        k_next = k_ref[(0, 0,  pl.dslice(t0, BT), slice(None))]  # [BT,BK]
+        v_next = v_ref[(0, 0,  pl.dslice(t0, BT), slice(None))]  # [BT,BV]
         if gk_ref is not None:
-            gk = gk_ref[(0, 0,  pl.dslice(t0, BT), slice(None))]  # [BT,BK]
-            g_last = gk[-1, :]
+            gk_next = gk_ref[(0, 0,  pl.dslice(t0, BT), slice(None))]  # [BT,BK]
+
+        return b_h, k_next, v_next, gk_next
+
+    b_h, curr_k, curr_k, curr_gk = lax.fori_loop(1, NT, body, (b_h, curr_k, curr_v, curr_gk))
+    if curr_gk is not None:
+            g_last = curr_gk[-1, :]
             decay = jnp.exp(g_last)
             b_h = b_h * decay[:, None]  # [BK, BV] * [BK,1]
-            k = (k * jnp.exp(g_last[None, :] - gk)).astype(k.dtype)
-
-        # state update
-        b_h = b_h + jax.lax.dot(k.T, v)            
-
-        return b_h
-
-    b_h = lax.fori_loop(0, NT, body, b_h)
+            curr_k = (curr_k * jnp.exp(g_last[None, :] - curr_gk)).astype(curr_gk.dtype)
+    b_h = b_h + jax.lax.dot(curr_k.T, curr_v)  
+        
     if ht_ref is not None:
         ht_ref[0, 0] = b_h
 
