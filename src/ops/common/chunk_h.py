@@ -358,7 +358,7 @@ def chunk_fwd_h_kernel_with_same_seq(
         return batch_index, head_index, k_index, v_index
 
     def ht_index_map(batch_index, head_index, k_index, v_index):
-        return batch_index, head_index, k_index, v_index
+        return batch_index, 0, head_index, k_index, v_index
 
     out_shape = [
         jax.ShapeDtypeStruct(
