@@ -288,14 +288,14 @@ def _chunk_fwd_h_kernel_with_same_seq(
 
         return b_h, k_next, v_next, gk_next
 
-    b_h, curr_k, curr_k, curr_gk = lax.fori_loop(1, NT, body, (b_h, curr_k, curr_v, curr_gk))
+    b_h, curr_k, curr_v, curr_gk = lax.fori_loop(1, NT, body, (b_h, curr_k, curr_v, curr_gk))
     if curr_gk is not None:
-            g_last = curr_gk[-1, :]
-            decay = jnp.exp(g_last)
-            b_h = b_h * decay[:, None]  # [BK, BV] * [BK,1]
-            curr_k = (curr_k * jnp.exp(g_last[None, :] - curr_gk)).astype(curr_gk.dtype)
+        g_last = curr_gk[-1, :]
+        decay = jnp.exp(g_last)
+        b_h = b_h * decay[:, None]  # [BK, BV] * [BK,1]
+        curr_k = (curr_k * jnp.exp(g_last[None, :] - curr_gk)).astype(curr_gk.dtype)
     b_h = b_h + jax.lax.dot(curr_k.T, curr_v)  
-        
+
     if ht_ref is not None:
         ht_ref[0, 0] = b_h
 
