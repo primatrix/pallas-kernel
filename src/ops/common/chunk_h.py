@@ -257,9 +257,9 @@ def _chunk_fwd_h_kernel_with_same_seq(
         b_h = h0_ref[0, 0]
     
     curr_k = k_ref[(0, 0,  pl.dslice(0, BT), slice(None))]
-    next_k = k_ref[(0, 0,  pl.dslice(jnp.minimum(BT, T-BT), BT), slice(None))]
+    next_k = k_ref[(0, 0,  pl.dslice(BT, BT), slice(None))]
     curr_v = v_ref[(0, 0,  pl.dslice(0, BT), slice(None))]
-    next_v = v_ref[(0, 0,  pl.dslice(jnp.minimum(BT, T-BT), BT), slice(None))]
+    next_v = v_ref[(0, 0,  pl.dslice(BT, BT), slice(None))]
 
     if gk_ref is not None:
         curr_gk = gk_ref[(0, 0,  pl.dslice(0, BT), slice(None))]
@@ -268,12 +268,8 @@ def _chunk_fwd_h_kernel_with_same_seq(
 
     def body(i_t, carry):
         b_h, curr_k, curr_v, curr_gk, next_k, next_v, next_gk = carry
-        t0 = jnp.minimum((i_t + 1) * BT, T - BT)
-        
-        new_k = k_ref[(0, 0,  pl.dslice(t0, BT), slice(None))]  # [BT,BK]
-        new_v = v_ref[(0, 0,  pl.dslice(t0, BT), slice(None))]  # [BT,BV]
-        if gk_ref is not None:
-            new_gk = gk_ref[(0, 0,  pl.dslice(t0, BT), slice(None))]  # [BT,BK]
+        t0 = (i_t + 1) * BT
+    
         if curr_gk is not None:
             g_last = curr_gk[-1, :]
             decay = jnp.exp(g_last)
@@ -286,8 +282,12 @@ def _chunk_fwd_h_kernel_with_same_seq(
         def store_fn(_):
             h_ref[0, i_s, 0] = b_h
             return None
+        lax.cond((i_t % NTS) == 0, store_fn, lambda _: None, operand=None)   
 
-        lax.cond((i_t % NTS) == 0, store_fn, lambda _: None, operand=None)        
+        new_k = k_ref[(0, 0,  pl.dslice(t0, BT), slice(None))]  # [BT,BK]
+        new_v = v_ref[(0, 0,  pl.dslice(t0, BT), slice(None))]  # [BT,BV]
+        if gk_ref is not None:
+            new_gk = gk_ref[(0, 0,  pl.dslice(t0, BT), slice(None))]  # [BT,BK]     
 
         return b_h, next_k, next_v, next_gk, new_k, new_v, new_gk
 
