@@ -115,7 +115,6 @@ def _run_pallas(
             gk=gk,
             h0=h0,
             chunk_size=chunk_size,
-            cu_seqlens=cu,
             output_final_state=True,
         )
     # if cu is None:
