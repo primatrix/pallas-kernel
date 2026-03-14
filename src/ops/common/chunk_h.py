@@ -290,7 +290,12 @@ def _chunk_fwd_h_kernel_with_same_seq(
         b_h = carry
         copy_k0.wait()
         copy_v0.wait()
-        
+        i_s = i_t // NTS
+
+        def store_fn(_):
+            h_ref[0, i_s, 0] = b_h
+            return None
+        lax.cond((i_t % NTS) == 0, store_fn, lambda _: None, operand=None)   
         buf = jnp.mod(i_t , 2)
         next_buf = jnp.mod(i_t + 1,  2)
 
@@ -327,12 +332,7 @@ def _chunk_fwd_h_kernel_with_same_seq(
         else:
             lax.cond(i_t + 1 < NT, lambda _: do_prefetch(), lambda _:None, None)
         b_h = b_h + jax.lax.dot(k_scratch_ref[buf].T, v_scratch_ref[buf])      
-        i_s = i_t // NTS
-
-        def store_fn(_):
-            h_ref[0, i_s, 0] = b_h
-            return None
-        lax.cond((i_t % NTS) == 0, store_fn, lambda _: None, operand=None)   
+        
         return b_h
 
     b_h = lax.fori_loop(0, NT, body, b_h)
