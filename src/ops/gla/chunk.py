@@ -1248,3 +1248,127 @@ def chunk_gla_fwd_o_gk(
         chunk_size,
         use_exp2,
     )
+
+
+# =============================================================================
+# Pallas kernel: chunk_gla_bwd_fused
+# =============================================================================
+
+def chunk_gla_bwd_fused_kernel(
+    q_ref, k_ref, v_ref, g_ref, h_ref, do_ref, dh_ref,
+    dq_ref, dk_ref, dv_ref, dg_ref,
+    *,
+    BT: int,
+    scale: float,
+):
+    b_q = q_ref[0, 0]
+    b_k = k_ref[0, 0]
+    b_v = v_ref[0, 0]
+    b_g = g_ref[0, 0].astype(jnp.float32)
+    b_h = h_ref[0, 0].astype(jnp.float32)
+    b_do = do_ref[0, 0]
+    b_dh = dh_ref[0, 0].astype(jnp.float32)
+    
+    b_gn = b_g[BT - 1, :]
+    
+    # 1. dA
+    b_A_do = b_do.astype(b_v.dtype)
+    b_dA = jnp.dot(b_A_do, b_v.T, precision=jax.lax.Precision.HIGHEST, preferred_element_type=jnp.float32) * scale
+    mask = jnp.arange(BT)[:, None] >= jnp.arange(BT)[None, :]
+    b_dA = jnp.where(mask, b_dA, 0.0)
+
+    # 2. dv
+    b_dv_intra = jnp.dot(b_dA.T.astype(b_do.dtype), b_do, precision=jax.lax.Precision.HIGHEST, preferred_element_type=jnp.float32)
+    k_decay = (b_k * jnp.exp(b_gn[None, :] - b_g)).astype(b_k.dtype)
+    b_dv_inter = jnp.dot(k_decay, b_dh.astype(b_k.dtype), precision=jax.lax.Precision.HIGHEST, preferred_element_type=jnp.float32)
+    b_dv = b_dv_intra + b_dv_inter
+    dv_ref[0, 0] = b_dv.astype(dv_ref.dtype)
+
+    # 3. dq
+    k_neg = (b_k * jnp.exp(-b_g)).astype(b_k.dtype)
+    b_dq_intra = jnp.dot(b_dA.astype(k_neg.dtype), k_neg, precision=jax.lax.Precision.HIGHEST, preferred_element_type=jnp.float32) * jnp.exp(b_g)
+    b_dq_inter = jnp.dot(b_do, b_h.astype(b_do.dtype).T, precision=jax.lax.Precision.HIGHEST, preferred_element_type=jnp.float32) * (scale * jnp.exp(b_g))
+    b_dq = b_dq_intra + b_dq_inter
+    dq_ref[0, 0] = b_dq.astype(dq_ref.dtype)
+
+    # 4. dk
+    q_pos = (b_q * jnp.exp(b_g)).astype(b_q.dtype)
+    b_dk_intra = jnp.dot(b_dA.T.astype(q_pos.dtype), q_pos, precision=jax.lax.Precision.HIGHEST, preferred_element_type=jnp.float32) * jnp.exp(-b_g)
+    b_dk_inter = jnp.dot(b_v, b_dh.astype(b_v.dtype).T, precision=jax.lax.Precision.HIGHEST, preferred_element_type=jnp.float32) * jnp.exp(b_gn[None, :] - b_g)
+    b_dk = b_dk_intra + b_dk_inter
+    dk_ref[0, 0] = b_dk.astype(dk_ref.dtype)
+    
+    # 5. dg
+    dgk_inter = jnp.exp(b_gn) * jnp.sum(b_h * b_dh, axis=1) + jnp.sum(b_dk_inter * b_k.astype(jnp.float32), axis=0)
+    dg_raw = b_q.astype(jnp.float32) * b_dq - b_k.astype(jnp.float32) * b_dk
+    
+    # Use upper triangular matrix multiplication for reverse cumsum
+    mask_upper = jnp.arange(BT)[None, :] >= jnp.arange(BT)[:, None]
+    M_upper = jnp.where(mask_upper, 1.0, 0.0).astype(jnp.float32)
+    dg_rev_cumsum = jnp.dot(M_upper, dg_raw, precision=jax.lax.Precision.HIGHEST, preferred_element_type=jnp.float32)
+    
+    b_dg = dg_rev_cumsum + dgk_inter[None, :]
+    dg_ref[0, 0] = b_dg.astype(dg_ref.dtype)
+
+
+def chunk_gla_bwd_fused_pl(
+    q: jax.Array,  # [B, T, H, K]
+    k: jax.Array,  # [B, T, H, K]
+    v: jax.Array,  # [B, T, H, V]
+    g: jax.Array,  # [B, T, H, K]
+    h: jax.Array,  # [B, NT, H, K, V]
+    do: jax.Array, # [B, T, H, V]
+    dh: jax.Array, # [B, NT, H, K, V]
+    scale: float,
+    chunk_size: int,
+):
+    B, T, H, K = q.shape
+    V = v.shape[-1]
+    BT = chunk_size
+    NT = T // BT
+    total_NT = B * NT
+
+    # Reshape
+    _q = q.reshape(B, NT, BT, H, K).transpose(3, 0, 1, 2, 4).reshape(H, total_NT, BT, K)
+    _k = k.reshape(B, NT, BT, H, K).transpose(3, 0, 1, 2, 4).reshape(H, total_NT, BT, K)
+    _v = v.reshape(B, NT, BT, H, V).transpose(3, 0, 1, 2, 4).reshape(H, total_NT, BT, V)
+    _g = g.reshape(B, NT, BT, H, K).transpose(3, 0, 1, 2, 4).reshape(H, total_NT, BT, K)
+    _do = do.reshape(B, NT, BT, H, V).transpose(3, 0, 1, 2, 4).reshape(H, total_NT, BT, V)
+    _h = h.transpose(2, 0, 1, 3, 4).reshape(H, total_NT, K, V)
+    _dh = dh.transpose(2, 0, 1, 3, 4).reshape(H, total_NT, K, V)
+
+    # BlockSpecs
+    grid = (H, total_NT)
+    spec_K = pl.BlockSpec([1, 1, BT, K], index_map=lambda h, nt: (h, nt, 0, 0))
+    spec_V = pl.BlockSpec([1, 1, BT, V], index_map=lambda h, nt: (h, nt, 0, 0))
+    spec_h = pl.BlockSpec([1, 1, K, V], index_map=lambda h, nt: (h, nt, 0, 0))
+
+    dq_shape = jax.ShapeDtypeStruct([H, total_NT, BT, K], q.dtype)
+    dk_shape = jax.ShapeDtypeStruct([H, total_NT, BT, K], k.dtype)
+    dv_shape = jax.ShapeDtypeStruct([H, total_NT, BT, V], v.dtype)
+    dg_shape = jax.ShapeDtypeStruct([H, total_NT, BT, K], g.dtype)
+
+    dq, dk, dv, dg = pl.pallas_call(
+        functools.partial(chunk_gla_bwd_fused_kernel, BT=BT, scale=scale),
+        grid=grid,
+        out_shape=[dq_shape, dk_shape, dv_shape, dg_shape],
+        in_specs=[spec_K, spec_K, spec_V, spec_K, spec_h, spec_V, spec_h],
+        out_specs=[spec_K, spec_K, spec_V, spec_K],
+        compiler_params=pltpu.CompilerParams(
+            vmem_limit_bytes=32 * 1024 * 1024, # 32 MB limit to be safe
+        ),
+    )(_q, _k, _v, _g, _h, _do, _dh)
+
+    # Post-process
+    def _unreshape(x, shape):
+        x = x.reshape(H, B, NT, BT, shape[-1])
+        x = x.transpose(1, 0, 2, 3, 4)
+        x = x.reshape(B, H, T, shape[-1])
+        return x.transpose(0, 2, 1, 3)
+
+    dq = _unreshape(dq, [B, T, H, K])
+    dk = _unreshape(dk, [B, T, H, K])
+    dv = _unreshape(dv, [B, T, H, V])
+    dg = _unreshape(dg, [B, T, H, K])
+    
+    return dq, dk, dv, dg
