@@ -40,7 +40,6 @@ from fla.modules import ShortConvolution as TritonShortConv
 # --- Torch_CPU implementations (local, pure PyTorch) ---
 from tests.src.ops.gla import (
     naive_recurrent_gla as cpu_naive_recurrent_gla,
-    chunk_gla as cpu_chunk_gla,
     fused_chunk_gla as cpu_fused_chunk_gla,
     chunk_local_cumsum as cpu_chunk_local_cumsum,
     chunk_fwd_h as cpu_chunk_fwd_h,
@@ -219,7 +218,7 @@ def test_triton_chunk_basic() -> bool:
     o_triton, s_triton = triton_chunk_gla(
         q.to(DEVICE), k.to(DEVICE), v.to(DEVICE), gk.to(DEVICE), output_final_state=True
     )
-    o_cpu, s_cpu = cpu_chunk_gla(q, k, v, gk, output_final_state=True)
+    o_cpu, s_cpu = cpu_fused_chunk_gla(q, k, v, gk, output_final_state=True)
     ok = compare_tensor("output", o_triton.cpu(), o_cpu, atol=2e-2, rtol=2e-2)
     ok &= compare_tensor("final_state", s_triton.cpu(), s_cpu, atol=2e-2, rtol=2e-2)
     return ok
@@ -244,7 +243,7 @@ def test_triton_chunk_init_state() -> bool:
         initial_state=h0.to(DEVICE),
         output_final_state=True,
     )
-    o_cpu, s_cpu = cpu_chunk_gla(q, k, v, gk, initial_state=h0, output_final_state=True)
+    o_cpu, s_cpu = cpu_fused_chunk_gla(q, k, v, gk, initial_state=h0, output_final_state=True)
     ok = compare_tensor("output", o_triton.cpu(), o_cpu, atol=2e-2, rtol=2e-2)
     ok &= compare_tensor("final_state", s_triton.cpu(), s_cpu, atol=2e-2, rtol=2e-2)
     return ok
@@ -776,7 +775,7 @@ def test_cpu_chunk_vs_naive() -> bool:
     gk = F.logsigmoid(torch.randn(B, T, H, K))
 
     o_naive, s_naive = cpu_naive_recurrent_gla(q, k, v, gk, output_final_state=True)
-    o_chunk, s_chunk = cpu_chunk_gla(q, k, v, gk, output_final_state=True)
+    o_chunk, s_chunk = cpu_fused_chunk_gla(q, k, v, gk, output_final_state=True)
     ok = compare_tensor("output", o_naive, o_chunk, atol=5e-5, rtol=5e-5)
     ok &= compare_tensor("final_state", s_naive, s_chunk, atol=5e-5, rtol=5e-5)
     return ok
@@ -796,7 +795,7 @@ def test_cpu_chunk_vs_naive_init_state() -> bool:
     o_naive, s_naive = cpu_naive_recurrent_gla(
         q, k, v, gk, initial_state=h0, output_final_state=True
     )
-    o_chunk, s_chunk = cpu_chunk_gla(
+    o_chunk, s_chunk = cpu_fused_chunk_gla(
         q, k, v, gk, initial_state=h0, output_final_state=True
     )
     ok = compare_tensor("output", o_naive, o_chunk, atol=5e-5, rtol=5e-5)
@@ -817,7 +816,7 @@ def test_cpu_chunk_vs_naive_varlen() -> bool:
     cu = torch.tensor([0, 16, 32, 48], dtype=torch.long)
 
     o_naive, _ = cpu_naive_recurrent_gla(q, k, v, gk, cu_seqlens=cu)
-    o_chunk, _ = cpu_chunk_gla(q, k, v, gk, cu_seqlens=cu)
+    o_chunk, _ = cpu_fused_chunk_gla(q, k, v, gk, cu_seqlens=cu)
     return compare_tensor("output", o_naive, o_chunk, atol=5e-5, rtol=5e-5)
 
 
@@ -1290,22 +1289,28 @@ def test_cpu_chunk_gla_fwd_intra_gk() -> bool:
     g_cumsum = cpu_chunk_local_cumsum(g.float(), chunk_size=C)
     A = cpu_chunk_gla_fwd_intra_gk(q.float(), k.float(), g_cumsum, scale, chunk_size=C)
 
-    # Manual computation per chunk
+    # Manual computation per chunk (numerically stable with g_n reference point)
     q_c = q.float().view(B, NT, C, H, K)
     k_c = k.float().view(B, NT, C, H, K)
     gc = g_cumsum.view(B, NT, C, H, K)
 
-    q_gated = q_c * gc.exp()
-    k_gated = k_c * (-gc).exp()
-    A_manual = torch.einsum("bnihk,bnjhk->bnhij", q_gated, k_gated)
+    g_n = gc[:, :, 0:1, :, :]  # [B, NT, 1, H, K]
+    q_gated = q_c * (gc - g_n).exp()
+    k_gated = k_c * (g_n - gc).exp()
+    A_manual = torch.einsum("bnihk,bnjhk->bnihj", q_gated, k_gated) * scale
+    # Causal mask: 上三角清零
     causal_mask = torch.tril(torch.ones(C, C, dtype=torch.bool))
-    A_manual = A_manual.masked_fill(~causal_mask, 0.0)
+    A_manual = A_manual.masked_fill(~causal_mask[None, None, :, None, :], 0.0)
+    # Reshape to match new [B, T, H, BT] format
+    A_manual = A_manual.reshape(B, T, H, C)
 
     ok = compare_tensor("A matrix", A, A_manual, atol=1e-5, rtol=1e-5)
-    # Check causality: upper triangle should be zero
-    upper = A[:, :, :, 0, -1]  # q_pos=0, k_pos=last → should be 0
-    ok &= (upper.abs() < 1e-10).all().item()
-    print(f"  {'[PASS]' if ok else '[FAIL]'} upper triangle is zero (causal)")
+    # Verify lower-triangle entries match (causal mask is now built into the function)
+    causal_mask_flat = torch.tril(torch.ones(C, C, dtype=torch.bool))[None, :, None, :]  # [1, C, 1, C]
+    causal_mask_flat = causal_mask_flat.repeat(1, NT, 1, 1)  # [1, T, 1, C]
+    A_lower = A.masked_fill(~causal_mask_flat, 0.0)
+    A_manual_lower = A_manual.masked_fill(~causal_mask_flat, 0.0)
+    ok &= compare_tensor("A lower tri", A_lower, A_manual_lower, atol=1e-5, rtol=1e-5)
     return ok
 
 
@@ -1331,7 +1336,7 @@ def test_cpu_chunk_gla_fwd_o_gk() -> bool:
     o = cpu_chunk_gla_fwd_o_gk(q, v, g_cumsum, A, h_all, scale, chunk_size=C)
 
     # compare_tensor with full chunk_gla
-    o_ref, _ = cpu_chunk_gla(
+    o_ref, _ = cpu_fused_chunk_gla(
         q.to(torch.float32),
         k.to(torch.float32),
         v.to(torch.float32),
@@ -1361,7 +1366,7 @@ def test_cpu_chunk_gla_fwd() -> bool:
     gk = torch.randn(B, T, H, K) * 0.1
     h0 = torch.randn(B, H, K, V) * 0.01
 
-    o_ref, ht_ref = cpu_chunk_gla(
+    o_ref, ht_ref = cpu_fused_chunk_gla(
         q,
         k,
         v,
@@ -1447,7 +1452,7 @@ def test_cpu_sub_functions_compose() -> bool:
     h0 = torch.randn(B, H, K, V).float() * 0.01
 
     # Reference
-    o_ref, ht_ref = cpu_chunk_gla(
+    o_ref, ht_ref = cpu_fused_chunk_gla(
         q, k, v, g, scale=scale, initial_state=h0, output_final_state=True, chunk_size=C
     )
 

@@ -4,8 +4,7 @@ Both compute the intra-chunk attention matrix:
 
     A[i, j] = scale * sum_k (q[i] * exp(g[i])) * (k[j] * exp(-g[j]))
 
-CPU returns [B, NT, C_i, H, C_j] (einsum 'bnihk,bnjhk->bnihj').
-Triton returns [B, T, H, BT] where BT = chunk_size.
+Both return [B, T, H, BT] where BT = chunk_size.
 
 Comparison is restricted to the causal (lower-triangular) entries
 within each chunk, because the Triton kernel only writes the lower
@@ -14,8 +13,11 @@ triangle and leaves upper-triangle entries uninitialized.
 
 from __future__ import annotations
 import sys
+import os
 from pathlib import Path
 
+# Disable TF32 for deterministic float32 results on Ampere+ GPUs.
+os.environ["TRITON_F32_DEFAULT"] = "ieee"
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 import pytest
@@ -27,6 +29,8 @@ from tests.utils import compare_tensor
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 HAS_CUDA = torch.cuda.is_available()
+torch.backends.cuda.matmul.allow_tf32 = False
+torch.backends.cudnn.allow_tf32 = False
 
 triton_imports_available = False
 try:
@@ -50,8 +54,8 @@ requires_triton = pytest.mark.skipif(
 #   B, T, H, K       — shape (required, T must be a multiple of chunk_size)
 #   seed              — random seed (required)
 #   chunk_size        — block size (default 64)
-#   atol              — absolute tolerance (default 1e-2)
-#   rtol              — relative tolerance (default 1e-2)
+#   atol              — absolute tolerance (default 1e-5)
+#   rtol              — relative tolerance (default 1e-5)
 #   scale             — float or None (default None = K^{-0.5})
 # ============================================================================
 
@@ -172,8 +176,8 @@ def _apply_chunk_causal_mask_varlen(A_flat, cu_seqlens, chunk_size):
 @pytest.mark.parametrize("cfg", CASES, ids=[_case_id(c) for c in CASES])
 def test_gold_vs_cpu(cfg):
     B, T, H, K = cfg["B"], cfg["T"], cfg["H"], cfg["K"]
-    atol = cfg.get("atol", 1e-4)
-    rtol = cfg.get("rtol", 1e-4)
+    atol = cfg.get("atol", 1e-5)
+    rtol = cfg.get("rtol", 1e-5)
     scale = cfg.get("scale", K**-0.5)
     chunk_size = cfg.get("chunk_size", 64)
     C = chunk_size
@@ -183,10 +187,9 @@ def test_gold_vs_cpu(cfg):
     torch.manual_seed(cfg["seed"])
     q, k, g = _make_inputs(B, T, H, K)
 
-    # CPU: returns [B, NT, C_i, H, C_j] (einsum 'bnihk,bnjhk->bnihj')
+    # CPU: returns [B, T, H, BT] (same as Triton)
     A_cpu = cpu_chunk_gla_fwd_intra_gk(q, k, g, scale=scale, chunk_size=C)
-    # Reshape to flat format [B, T, H, C] (merge NT and C_i dims)
-    A_cpu_flat = A_cpu.reshape(B, T, H, C)
+    A_cpu_flat = A_cpu
 
     # Triton GPU: returns [B, T, H, BT]
     A_triton = triton_chunk_gla_fwd_intra_gk(
@@ -285,8 +288,8 @@ def _make_segment_inputs_intra(B, L, H, K, chunk_size, scale):
     g_p = F.pad(g_raw, (0, 0, 0, 0, 0, pad)) if pad > 0 else g_raw
 
     A_ref = cpu_chunk_gla_fwd_intra_gk(q_p, k_p, g_p, scale=scale, chunk_size=C)
-    # [B, NT, C_i, H, C_j] → [B, T_pad, H, C] → take first L rows
-    A_ref_flat = A_ref.reshape(B, T_pad, H, C)[:, :L]
+    # [B, T_pad, H, BT] → take first L rows
+    A_ref_flat = A_ref[:, :L]
 
     return q_raw, k_raw, g_raw, A_ref_flat
 
@@ -306,8 +309,8 @@ def test_gold_varlen_vs_segments(cfg):
     H, K = cfg["H"], cfg["K"]
     C = cfg.get("chunk_size", 64)
     scale = cfg.get("scale", K**-0.5)
-    atol = cfg.get("atol", 1e-2)
-    rtol = cfg.get("rtol", 1e-2)
+    atol = cfg.get("atol", 1e-5)
+    rtol = cfg.get("rtol", 1e-5)
     B = 1
 
     torch.manual_seed(cfg["seed"])

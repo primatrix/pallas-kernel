@@ -20,7 +20,6 @@ from tests.src.modules.layernorm import RMSNorm
 from tests.src.modules.fused_norm_gate import FusedRMSNormGated
 from tests.src.modules.convolution import ShortConvolution
 from tests.src.ops.gla import (
-    chunk_gla,
     naive_recurrent_gla,
     fused_chunk_gla,
     fused_recurrent_gla,
@@ -28,7 +27,6 @@ from tests.src.ops.gla import (
 
 __all__ = [
     "naive_recurrent_gla",
-    "chunk_gla",
     "fused_chunk_gla",
     "GatedLinearAttention",
 ]
@@ -350,7 +348,7 @@ class GatedLinearAttention(nn.Module):
         elif mode == "chunk":
             # q: [B, T, H, K], k: [B, T, H, K], v: [B, T, H, V], g: [B, T, H, K]
             # → o: [B, T, H, V], recurrent_state: [B, H, K, V]
-            o, recurrent_state = chunk_gla(
+            o, recurrent_state = fused_chunk_gla(
                 q=q,
                 k=k,
                 v=v,
