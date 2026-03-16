@@ -60,7 +60,7 @@ def _chunk_fwd_h_kernel(
         # store intermediate state
         i_s = i_t // NTS
         @pl.when((i_t % NTS) == 0)
-        def store_fn(_):
+        def store_fn():
             h_ref[i_s, 0] = b_h
 
         k = k_ref[(0, pl.dslice(t0, BT), slice(None))]  # [BT,BK]
