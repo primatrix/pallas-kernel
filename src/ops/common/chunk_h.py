@@ -248,7 +248,8 @@ def _chunk_fwd_h_kernel_with_same_seq(
     BT,
     BS,
 ):
-    b_i, b_j = pl.program_id(0), pl.program_id(1)
+    b_i, b_j, b_k = pl.program_id(0), pl.program_id(1), pl.program_id(3)
+    b_v = pl.program_id(3)
 
     T, BK = k_ref.shape[2], k_ref.shape[3]
     BV = v_ref.shape[3]
@@ -257,16 +258,17 @@ def _chunk_fwd_h_kernel_with_same_seq(
     b_h = jnp.zeros((BK, BV), dtype=jnp.float32)
     if h0_ref is not None:
         b_h = h0_ref[0, 0]
-
+    k_slice = pl.dslice(b_k * BK, BK)
+    v_slice = pl.dslice(b_v * BV, BV)
     copy_k0 = pltpu.make_async_copy(
-        k_ref.at[(b_i, b_j,  pl.dslice(0, BT), slice(None))],
+        k_ref.at[(b_i, b_j,  pl.dslice(0, BT), k_slice)],
         k_scratch_ref.at[0],
         local_copy_sem0,
     )
     copy_k0.start()
 
     copy_v0 = pltpu.make_async_copy(
-        v_ref.at[(b_i, b_j,  pl.dslice(0, BT), slice(None))],
+        v_ref.at[(b_i, b_j,  pl.dslice(0, BT), v_slice)],
         v_scratch_ref.at[0],
         local_copy_sem1,
     )
@@ -274,7 +276,7 @@ def _chunk_fwd_h_kernel_with_same_seq(
 
     if gk_ref is not None:
         copy_gk0 = pltpu.make_async_copy(
-            gk_ref.at[(b_i, b_j,  pl.dslice(0, BT), slice(None))],
+            gk_ref.at[(b_i, b_j,  pl.dslice(0, BT), k_slice)],
             gk_scratch_ref.at[0],
             local_copy_sem2,
         )
@@ -297,14 +299,16 @@ def _chunk_fwd_h_kernel_with_same_seq(
         def do_prefetch():
             t0 = (i_t + 1) * BT
             pl_dslice = pl.dslice(t0, BT)
+            k_dslice = pl.dslice(b_k * BK, BK)
+            v_dslice = pl.dslice(b_v * BV, BV)
             copy_k0 = pltpu.make_async_copy(
-                k_ref.at[(b_i, b_j,  pl_dslice, slice(None))],
+                k_ref.at[(b_i, b_j,  pl_dslice, k_dslice)],
                 k_scratch_ref.at[next_buf],
                 local_copy_sem0,
             )
             copy_k0.start()
             copy_v0 = pltpu.make_async_copy(
-                v_ref.at[(b_i, b_j, pl_dslice, slice(None))],
+                v_ref.at[(b_i, b_j, pl_dslice, v_dslice)],
                 v_scratch_ref.at[next_buf],
                 local_copy_sem1,
             )
@@ -312,7 +316,7 @@ def _chunk_fwd_h_kernel_with_same_seq(
 
             if gk_ref is not None:
                 copy_gk0 = pltpu.make_async_copy(
-                    gk_ref.at[(b_i, b_j,  pl_dslice, slice(None))],
+                    gk_ref.at[(b_i, b_j,  pl_dslice, k_dslice)],
                     gk_scratch_ref.at[next_buf],
                     local_copy_sem2,
                 )
