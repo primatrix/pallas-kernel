@@ -423,15 +423,15 @@ def chunk_fwd_h_kernel_with_same_seq(
         pl.BlockSpec((1, 1, T, BK), k_index_map),
         pl.BlockSpec((1, 1, T, BV), v_index_map),
     ]
-    k_scratch = pltpu.VMEM((2, BT, BK), jnp.float32)
-    v_scratch = pltpu.VMEM((2, BT, BV), jnp.float32)
+    k_scratch = pltpu.VMEM((2, BT, BK), jnp.float32, memory_space=pltpu.HBM)
+    v_scratch = pltpu.VMEM((2, BT, BV), jnp.float32, memory_space=pltpu.HBM)
     scratch_shapes = [k_scratch, v_scratch]
     if h0 is not None:
         in_specs.append(pl.BlockSpec((1, 1, BK, BV), h0_index_map))
     else:
         in_specs.append(None)
     if gk is not None:
-        in_specs.append(pl.BlockSpec((1, 1, T, BK), gk_index_map))
+        in_specs.append(pl.BlockSpec((1, 1, T, BK), gk_index_map, memory_space=pltpu.HBM))
         gk_scratch = pltpu.VMEM((2, BT, BK), jnp.float32)
         scratch_shapes.append(gk_scratch)
     else:
