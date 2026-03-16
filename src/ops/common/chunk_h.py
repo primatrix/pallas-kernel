@@ -232,10 +232,10 @@ def chunk_fwd_h_kernel(
 
 
 def _chunk_fwd_h_kernel_with_same_seq(
-    k_ref,  # [1, 1, T, BK]
-    v_ref,  # [1, 1, T, BV]
+    k_ref,  # [B, H, T, BK]
+    v_ref,  # [B, H, T, BV]
     h0_ref,  # [1, 1, BK, BV]
-    gk_ref,  # [1, 1, T, BK]
+    gk_ref,  # [B, H, T, BK]
     h_ref,  # [1, NS, 1, BK, BV]
     ht_ref,  # [1, 1, BK , BV]
     k_scratch_ref,
@@ -248,6 +248,8 @@ def _chunk_fwd_h_kernel_with_same_seq(
     BT,
     BS,
 ):
+    b_i, b_j = pl.program_id(0), pl.program_id(1)
+
     T, BK = k_ref.shape[2], k_ref.shape[3]
     BV = v_ref.shape[3]
     NT = pl.cdiv(T, BT)
@@ -257,14 +259,14 @@ def _chunk_fwd_h_kernel_with_same_seq(
         b_h = h0_ref[0, 0]
 
     copy_k0 = pltpu.make_async_copy(
-        k_ref.at[(0, 0,  pl.dslice(0, BT), slice(None))],
+        k_ref.at[(b_i, b_j,  pl.dslice(0, BT), slice(None))],
         k_scratch_ref.at[0],
         local_copy_sem0,
     )
     copy_k0.start()
 
     copy_v0 = pltpu.make_async_copy(
-        v_ref.at[(0, 0,  pl.dslice(0, BT), slice(None))],
+        v_ref.at[(b_i, b_j,  pl.dslice(0, BT), slice(None))],
         v_scratch_ref.at[0],
         local_copy_sem1,
     )
@@ -272,7 +274,7 @@ def _chunk_fwd_h_kernel_with_same_seq(
 
     if gk_ref is not None:
         copy_gk0 = pltpu.make_async_copy(
-            gk_ref.at[(0, 0,  pl.dslice(0, BT), slice(None))],
+            gk_ref.at[(b_i, b_j,  pl.dslice(0, BT), slice(None))],
             gk_scratch_ref.at[0],
             local_copy_sem2,
         )
@@ -296,13 +298,13 @@ def _chunk_fwd_h_kernel_with_same_seq(
             t0 = (i_t + 1) * BT
             pl_dslice = pl.dslice(t0, BT)
             copy_k0 = pltpu.make_async_copy(
-                k_ref.at[(0, 0,  pl_dslice, slice(None))],
+                k_ref.at[(b_i, b_j,  pl_dslice, slice(None))],
                 k_scratch_ref.at[next_buf],
                 local_copy_sem0,
             )
             copy_k0.start()
             copy_v0 = pltpu.make_async_copy(
-                v_ref.at[(0, 0, pl_dslice, slice(None))],
+                v_ref.at[(b_i, b_j, pl_dslice, slice(None))],
                 v_scratch_ref.at[next_buf],
                 local_copy_sem1,
             )
@@ -310,7 +312,7 @@ def _chunk_fwd_h_kernel_with_same_seq(
 
             if gk_ref is not None:
                 copy_gk0 = pltpu.make_async_copy(
-                    gk_ref.at[(0, 0,  pl_dslice, slice(None))],
+                    gk_ref.at[(b_i, b_j,  pl_dslice, slice(None))],
                     gk_scratch_ref.at[next_buf],
                     local_copy_sem2,
                 )
@@ -420,8 +422,8 @@ def chunk_fwd_h_kernel_with_same_seq(
         out_specs.append(None)
 
     in_specs = [
-        pl.BlockSpec((1, 1, T, BK), k_index_map, memory_space=pltpu.HBM),
-        pl.BlockSpec((1, 1, T, BV), v_index_map, memory_space=pltpu.HBM),
+        pl.BlockSpec(memory_space=pltpu.HBM),
+        pl.BlockSpec(memory_space=pltpu.HBM),
     ]
     k_scratch = pltpu.VMEM((2, BT, BK), jnp.float32)
     v_scratch = pltpu.VMEM((2, BT, BV), jnp.float32)
@@ -431,7 +433,7 @@ def chunk_fwd_h_kernel_with_same_seq(
     else:
         in_specs.append(None)
     if gk is not None:
-        in_specs.append(pl.BlockSpec((1, 1, T, BK), gk_index_map, memory_space=pltpu.HBM))
+        in_specs.append(memory_space=pltpu.HBM)
         gk_scratch = pltpu.VMEM((2, BT, BK), jnp.float32)
         scratch_shapes.append(gk_scratch)
     else:
