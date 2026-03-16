@@ -433,7 +433,7 @@ def chunk_fwd_h_kernel_with_same_seq(
     else:
         in_specs.append(None)
     if gk is not None:
-        in_specs.append(memory_space=pltpu.HBM)
+        in_specs.append(pl.BlockSpec(memory_space=pltpu.HBM))
         gk_scratch = pltpu.VMEM((2, BT, BK), jnp.float32)
         scratch_shapes.append(gk_scratch)
     else:
