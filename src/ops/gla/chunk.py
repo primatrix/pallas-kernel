@@ -7,7 +7,7 @@ import jax.numpy as jnp
 import numpy as np
 from jax.experimental.pallas import dslice
 from jax.experimental.pallas import tpu as pltpu
-from src.utils import prepare_chunk_indices
+from src.utils import pad_to_multiple, prepare_chunk_indices
 from src.ops.utils import is_tpu_runtime
 from src.ops.common.chunk_h import chunk_fwd_h_kernel
 
@@ -323,11 +323,17 @@ def chunk_gla_fwd_intra_gk_ref(
     k_c = k.reshape(B, NT, C, H, K)
     g_c = g.reshape(B, NT, C, H, K)
 
-    q_gated = q_c * jnp.exp(g_c)
-    k_gated = k_c * jnp.exp(-g_c)
+    # Numerical stabilization: reference point g_n per chunk (first row)
+    g_n = g_c[:, :, 0:1, :, :]  # [B, NT, 1, H, K]
+    q_gated = q_c * jnp.exp(g_c - g_n)
+    k_gated = k_c * jnp.exp(g_n - g_c)
 
     # [B, NT, H, C, K] @ [B, NT, H, K, C] -> [B, NT, H, C, C] -> [B, NT, C, H, C]
-    A = jnp.einsum("bnihk,bnjhk->bnihj", q_gated, k_gated) * scale
+    A = jnp.einsum(
+        "bnihk,bnjhk->bnihj", q_gated, k_gated,
+        precision=lax.Precision.HIGHEST,
+        preferred_element_type=jnp.float32,
+    ) * scale
     A = A.reshape(B, T, H, C)
 
     return A
@@ -733,6 +739,70 @@ def chunk_gla_bwd_dqkg_ref(
 
 
 # =============================================================================
+# Varlen padding helpers (JAX)
+# =============================================================================
+
+
+def _pad_varlen_seqs_jax(
+    tensors: list[jax.Array],
+    cu_seqlens_cpu: jax.Array,
+    chunk_size: int,
+) -> tuple[list[jax.Array], jax.Array, list[int] | None, list[int] | None]:
+    """Pad each variable-length segment along dim=1 to a multiple of chunk_size.
+
+    Args:
+        tensors: list of [1, T_total, ...] arrays sharing the same sequence layout
+        cu_seqlens_cpu: [N+1] cumulative sequence lengths on CPU
+        chunk_size: block size
+
+    Returns:
+        (padded_tensors, new_cu_seqlens, orig_seqlens, padded_seqlens)
+        If no padding is needed, returns (tensors, cu_seqlens, None, None).
+    """
+    N = len(cu_seqlens_cpu) - 1
+    C = chunk_size
+    orig_seqlens = jnp.diff(cu_seqlens_cpu).tolist()
+    padded_seqlens = [((L + C - 1) // C) * C for L in orig_seqlens]
+
+    if orig_seqlens == padded_seqlens:
+        return tensors, cu_seqlens_cpu, None, None
+
+    padded = [[] for _ in tensors]
+    for i in range(N):
+        bos = int(cu_seqlens_cpu[i])
+        L = orig_seqlens[i]
+        pad = padded_seqlens[i] - L
+        for j, t in enumerate(tensors):
+            seg = t[:, bos : bos + L]
+            if pad > 0:
+                pw = ((0, 0), (0, pad)) + ((0, 0),) * (t.ndim - 2)
+                seg = jnp.pad(seg, pw)
+            padded[j].append(seg)
+
+    padded_tensors = [jnp.concatenate(p, axis=1) for p in padded]
+    offsets = [0]
+    for pl in padded_seqlens:
+        offsets.append(offsets[-1] + pl)
+    new_cu_seqlens = jnp.array(offsets, dtype=jnp.int32)
+
+    return padded_tensors, new_cu_seqlens, orig_seqlens, padded_seqlens
+
+
+def _unpad_varlen_seqs_jax(
+    tensor: jax.Array,
+    orig_seqlens: list[int],
+    padded_seqlens: list[int],
+) -> jax.Array:
+    """Remove per-segment padding from a variable-length array along dim=1."""
+    parts = []
+    offset = 0
+    for L, PL in zip(orig_seqlens, padded_seqlens):
+        parts.append(tensor[:, offset : offset + L])
+        offset += PL
+    return jnp.concatenate(parts, axis=1)
+
+
+# =============================================================================
 # Orchestrator: chunk_gla_bwd
 # =============================================================================
 
@@ -757,6 +827,10 @@ def chunk_gla_bwd(
     Follows the FLA/Triton convention: h and A are passed from the forward
     pass to avoid recomputation. If None, they are recomputed internally.
 
+    Pads inputs to a multiple of chunk_size, then calls the sub-functions.
+    For varlen mode, each segment is individually padded to a multiple of
+    chunk_size and cu_seqlens is updated accordingly.
+
     Args:
         q:  [B, T, H, K]
         k:  [B, T, H, K]
@@ -764,12 +838,14 @@ def chunk_gla_bwd(
         g:  [B, T, H, K] — raw log-space gates
         g_cumsum: [B, T, H, K] or None — pre-computed chunk-local cumsum
         scale: scaling factor
-        initial_state: [N, H, K, V] or None
+        initial_state: [B, H, K, V] or [N, H, K, V] (varlen) or None
         h:  [B, NT, H, K, V] or None — hidden states from forward
         A:  [B, T, H, C] or None — intra-chunk attention from forward
         do: [B, T, H, V] — output gradient
-        dht: [N, H, K, V] or None — terminal state gradient
-        cu_seqlens: unused
+        dht: [B, H, K, V] or [N, H, K, V] (varlen) or None — terminal state gradient
+        cu_seqlens: [N+1] cumulative sequence lengths for variable-length mode.
+            When provided, B must be 1. Segment lengths need not be multiples
+            of chunk_size — they are padded internally.
         chunk_size: block size
 
     Returns:
@@ -781,12 +857,26 @@ def chunk_gla_bwd(
     V = v.shape[-1]
     C = chunk_size
 
-    assert T % C == 0, "T must be a multiple of chunk_size for chunk_gla_bwd"
-    assert (cu_seqlens is None) or (cu_seqlens % C == 0).all(), (
-        "cu_seqlens must be multiples of chunk_size for chunk_gla_bwd"
-    )
+    # --- padding ---
+    orig_seqlens = None
+    padded_seqlens = None
 
-    NT = T // C
+    if cu_seqlens is not None:
+        assert B == 1
+        [q, k, v, g, do], cu_seqlens, orig_seqlens, padded_seqlens = (
+            _pad_varlen_seqs_jax([q, k, v, g, do], cu_seqlens, C)
+        )
+    else:
+        NT = (T + C - 1) // C
+        T_padded = NT * C
+        if T_padded > T:
+            pad = T_padded - T
+            pad_width = ((0, 0), (0, pad), (0, 0), (0, 0))
+            q = jnp.pad(q, pad_width)
+            k = jnp.pad(k, pad_width)
+            v = jnp.pad(v, pad_width)
+            g = jnp.pad(g, pad_width)
+            do = jnp.pad(do, pad_width)
 
     # 1. Chunk-local cumsum
     if g_cumsum is None:
@@ -814,19 +904,20 @@ def chunk_gla_bwd(
         h0=initial_state,
         dht=dht,
         scale=scale,
+        cu_seqlens_cpu=cu_seqlens,
         chunk_size=C,
     )
 
     # 4. dv (uses A from forward)
     if A is None:
         A = chunk_gla_fwd_intra_gk_ref(q, k, g_cumsum, scale, chunk_size=C)
-    dv = chunk_gla_bwd_dv_ref(k, g_cumsum, A, do, dh, chunk_size=C)
+    dv = chunk_gla_bwd_dv_ref(k, g_cumsum, A, do, dh, cu_seqlens_cpu=cu_seqlens, chunk_size=C)
 
     # 5. dA
-    dA = chunk_gla_bwd_dA_ref(v, do, scale, chunk_size=C)
+    dA = chunk_gla_bwd_dA_ref(v, do, scale, cu_seqlens_cpu=cu_seqlens, chunk_size=C)
 
     # 6. Intra-chunk dq, dk
-    dq, dk = chunk_gla_bwd_dqk_intra_ref(q, k, g_cumsum, dA, chunk_size=C)
+    dq, dk = chunk_gla_bwd_dqk_intra_ref(q, k, g_cumsum, dA, cu_seqlens_cpu=cu_seqlens, chunk_size=C)
 
     # 7. Inter-chunk dq, dk + gate gradient
     dq, dk, dg = chunk_gla_bwd_dqkg_ref(
@@ -840,8 +931,21 @@ def chunk_gla_bwd(
         dq,
         dk,
         scale,
+        cu_seqlens_cpu=cu_seqlens,
         chunk_size=C,
     )
+
+    # --- unpadding ---
+    if orig_seqlens is not None:
+        dq = _unpad_varlen_seqs_jax(dq, orig_seqlens, padded_seqlens)
+        dk = _unpad_varlen_seqs_jax(dk, orig_seqlens, padded_seqlens)
+        dv = _unpad_varlen_seqs_jax(dv, orig_seqlens, padded_seqlens)
+        dg = _unpad_varlen_seqs_jax(dg, orig_seqlens, padded_seqlens)
+    else:
+        dq = dq[:, :T]
+        dk = dk[:, :T]
+        dv = dv[:, :T]
+        dg = dg[:, :T]
 
     return dq, dk, dv, dg, dh0
 
@@ -935,7 +1039,10 @@ def chunk_gla_fwd(
 ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array | None, jax.Array]:
     """Chunk GLA forward orchestrator.
 
-    Pads inputs to a multiple of chunk_size, then calls the 4 sub-functions.
+    Pads inputs to a multiple of chunk_size (T dim) and 128 (K/V dims),
+    then calls the 4 sub-functions.
+    For varlen mode, each segment is individually padded to a multiple of
+    chunk_size and cu_seqlens is updated accordingly.
 
     Returns:
         (g_cumsum, A, h, ht, o)
@@ -943,20 +1050,24 @@ def chunk_gla_fwd(
     B, T, H, K = q.shape
     V = v.shape[-1]
     C = chunk_size
-    NT = (T + C - 1) // C
-    T_padded = NT * C
-    assert (cu_seqlens is None) or (cu_seqlens % C == 0).all(), (
-        "cu_seqlens must be multiples of chunk_size for chunk_gla_fwd"
-    )
-    # TODO(0xaskr): Use padding to support non-integer multiples of chunk_size.
 
-    if T_padded > T:
-        pad = T_padded - T
-        pad_width = ((0, 0), (0, pad), (0, 0), (0, 0))
-        q = jnp.pad(q, pad_width)
-        k = jnp.pad(k, pad_width)
-        v = jnp.pad(v, pad_width)
-        g = jnp.pad(g, pad_width)
+    # --- padding ---
+    orig_seqlens = None
+    padded_seqlens = None
+
+    if cu_seqlens is not None:
+        assert B == 1
+        [q, k, v, g], cu_seqlens, orig_seqlens, padded_seqlens = (
+            _pad_varlen_seqs_jax([q, k, v, g], cu_seqlens, C)
+        )
+    elif T % C != 0:
+        q, k, v, g = (pad_to_multiple(x, C, axis=1, val=0) for x in (q, k, v, g))
+
+    # K/V padding (chunk_fwd_h_kernel requires K%128==0, V%128==0)
+    q, k, g = (pad_to_multiple(x, 128, axis=3, val=0) for x in (q, k, g))
+    v = pad_to_multiple(v, 128, axis=3, val=0)
+    if initial_state is not None:
+        initial_state = pad_to_multiple(initial_state, [128, 128], axis=[2, 3], val=0)
 
     if g_cumsum is None:
         g_cumsum = chunk_local_cumsum_vector(g, C, cu_seqlens=cu_seqlens)
@@ -974,10 +1085,20 @@ def chunk_gla_fwd(
         h = h.reshape(k.shape[0], -1, k.shape[2], k.shape[3], v.shape[-1])
     A = chunk_gla_fwd_intra_gk(q, k, g_cumsum, scale, chunk_size=C)
     o = chunk_gla_fwd_o_gk(
-        q, v, g_cumsum, A, h, scale, chunk_size=C, cu_seqlens_cpu=cu_seqlens
+        q, v, g_cumsum, A, h, scale, chunk_size=C,
     )
 
-    o = o[:, :T]
+    # --- unpadding ---
+    o = o[..., :V]
+    g_cumsum = g_cumsum[..., :K]
+    h = h[..., :K, :V]
+    if ht is not None:
+        ht = ht[..., :K, :V]
+    # T unpadding
+    if orig_seqlens is not None:
+        o = _unpad_varlen_seqs_jax(o, orig_seqlens, padded_seqlens)
+    else:
+        o = o[:, :T]
     return g_cumsum, A, h, ht, o
 
 

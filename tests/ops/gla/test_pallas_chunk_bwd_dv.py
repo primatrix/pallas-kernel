@@ -75,6 +75,9 @@ def test_chunk_gla_bwd_dv(cfg):
     h_cpu, _ = cpu_chunk_fwd_h(k, v, gk_cpu, h0=h0, chunk_size=C)
     dh_cpu, _ = cpu_chunk_bwd_dh(q, k, v, gk_cpu, do, h0=h0, dht=dht, scale=scale, chunk_size=C)
     A_cpu = cpu_chunk_gla_fwd_intra_gk(q, k, gk_cpu, scale, chunk_size=C)
+    # Apply causal mask — fwd_intra_gk does NOT mask internally
+    causal_mask = torch.tril(torch.ones(C, C, dtype=torch.bool))
+    A_cpu = A_cpu.view(B, -1, C, H, C).masked_fill(~causal_mask[None, None, :, None, :], 0.0)
     A_cpu_flat = A_cpu.reshape(B, T, H, C)
 
     # Torch CPU dv

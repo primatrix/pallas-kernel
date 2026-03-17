@@ -370,10 +370,6 @@ def chunk_gla_fwd_intra_gk(
     # A[b,n,i,h,j] = scale * Σ_k q_gated[b,n,i,h,k] * k_gated[b,n,j,h,k]
     A = torch.einsum("bnihk,bnjhk->bnihj", q_gated, k_gated) * scale
 
-    # Causal mask: 上三角清零
-    causal_mask = torch.tril(torch.ones(BT, BT, dtype=torch.bool, device=q.device))
-    A = A.masked_fill(~causal_mask[None, None, :, None, :], 0.0)
-
     return A.reshape(B, T, H, BT)
 
 
@@ -535,6 +531,9 @@ def chunk_gla_fwd(
     A = chunk_gla_fwd_intra_gk(q, k, g=g_cumsum, scale=scale, cu_seqlens=cu_seqlens, chunk_size=C)
     assert (B, T_padded, H, C) == A.shape
     assert A.dtype == torch.float32, "Attention matrix must be float32 for numerical stability"
+    # Causal mask: apply lower-triangular mask per chunk
+    causal_mask = torch.tril(torch.ones(C, C, dtype=torch.bool, device=A.device))
+    A = A.view(B, -1, C, H, C).masked_fill(~causal_mask[None, None, :, None, :], 0.0).reshape(B, T_padded, H, C)
 
     o = chunk_gla_fwd_o_gk(q, v, g=g_cumsum, A=A, h=h, scale=scale, cu_seqlens=cu_seqlens, chunk_size=C)
     assert (B, T_padded, H, V) == o.shape
@@ -896,24 +895,30 @@ def chunk_gla_bwd(
 
     T_padded = q.shape[1]
 
-    # --- recompute forward intermediates ---
-    g_cumsum = chunk_local_cumsum(g, C, cu_seqlens)
+    # --- recompute forward intermediates (only when not provided) ---
+    if g_cumsum is None:
+        g_cumsum = chunk_local_cumsum(g, C, cu_seqlens)
 
-    h, _ = chunk_fwd_h(k, v, g_cumsum, h0=initial_state, output_final_state=False,
-                        cu_seqlens=cu_seqlens, chunk_size=C)
+    if h is None:
+        h, _ = chunk_fwd_h(k, v, g_cumsum, h0=initial_state, output_final_state=False,
+                            cu_seqlens=cu_seqlens, chunk_size=C)
 
     # --- backward ---
     dh, dh0 = chunk_bwd_dh(
-        q, k, v, g_cumsum, do, h0=initial_state, dht=dht, scale=scale,
+        q, k, v, gk = g_cumsum, do=do, h0=initial_state, dht=dht, scale=scale,
         cu_seqlens=cu_seqlens, chunk_size=C,
     )
 
-    dA = chunk_gla_bwd_dA(v, do, scale, cu_seqlens=cu_seqlens, chunk_size=C)
-
-    A = chunk_gla_fwd_intra_gk(q, k, g_cumsum, scale, cu_seqlens=cu_seqlens, chunk_size=C)
-    A_flat = A.reshape(B, T_padded, H, C)
+    if A is not None:
+        A_flat = A.reshape(B, T_padded, H, C)
+    else:
+        A = chunk_gla_fwd_intra_gk(q, k, g_cumsum, scale, cu_seqlens=cu_seqlens, chunk_size=C)
+        causal_mask = torch.tril(torch.ones(C, C, dtype=torch.bool, device=A.device))
+        A = A.view(B, -1, C, H, C).masked_fill(~causal_mask[None, None, :, None, :], 0.0)
+        A_flat = A.reshape(B, T_padded, H, C)
     dv = chunk_gla_bwd_dv(k, g_cumsum, A_flat, do, dh, cu_seqlens=cu_seqlens, chunk_size=C)
 
+    dA = chunk_gla_bwd_dA(v, do, scale, cu_seqlens=cu_seqlens, chunk_size=C)
     dq, dk = chunk_gla_bwd_dqk_intra(q, k, g_cumsum, dA, cu_seqlens=cu_seqlens, chunk_size=C)
 
     dq, dk, dg = chunk_gla_bwd_dqkg(

@@ -163,5 +163,64 @@ def test_gold_vs_cpu(cfg):
         assert compare_tensor("dh0", dh0_gold, dh0_cpu, atol=atol, rtol=rtol)
 
 
+# ============================================================================
+# Structural test — varlen packed vs separate
+# ============================================================================
+
+
+def test_varlen_packed_vs_separate():
+    """Backward dh: packed varlen (CPU cu_seqlens) == separate per-segment."""
+    torch.manual_seed(720)
+    H, K, V = 2, 32, 64
+    C = 64
+    s1_len, s2_len = 64, 128
+    scale = K**-0.5
+
+    q1 = torch.randn(1, s1_len, H, K)
+    k1 = torch.randn(1, s1_len, H, K)
+    v1 = torch.randn(1, s1_len, H, V)
+    g1 = F.logsigmoid(torch.randn(1, s1_len, H, K))
+    do1 = torch.randn(1, s1_len, H, V)
+    h01 = torch.randn(1, H, K, V)
+    dht1 = torch.randn(1, H, K, V)
+
+    q2 = torch.randn(1, s2_len, H, K)
+    k2 = torch.randn(1, s2_len, H, K)
+    v2 = torch.randn(1, s2_len, H, V)
+    g2 = F.logsigmoid(torch.randn(1, s2_len, H, K))
+    do2 = torch.randn(1, s2_len, H, V)
+    h02 = torch.randn(1, H, K, V)
+    dht2 = torch.randn(1, H, K, V)
+
+    # Per-segment
+    gc1 = cpu_chunk_local_cumsum(g1, C)
+    dh1, dh01 = cpu_chunk_bwd_dh(q1, k1, v1, gc1, do1, h0=h01, dht=dht1, scale=scale, chunk_size=C)
+    gc2 = cpu_chunk_local_cumsum(g2, C)
+    dh2, dh02 = cpu_chunk_bwd_dh(q2, k2, v2, gc2, do2, h0=h02, dht=dht2, scale=scale, chunk_size=C)
+
+    # Packed
+    cu = torch.tensor([0, s1_len, s1_len + s2_len], dtype=torch.long)
+    q_cat = torch.cat([q1, q2], dim=1)
+    k_cat = torch.cat([k1, k2], dim=1)
+    v_cat = torch.cat([v1, v2], dim=1)
+    gc_cat = torch.cat([gc1, gc2], dim=1)
+    do_cat = torch.cat([do1, do2], dim=1)
+    h0_cat = torch.cat([h01, h02], dim=0)   # [N, H, K, V]
+    dht_cat = torch.cat([dht1, dht2], dim=0)
+
+    dh_p, dh0_p = cpu_chunk_bwd_dh(
+        q_cat, k_cat, v_cat, gc_cat, do_cat,
+        h0=h0_cat, dht=dht_cat, scale=scale,
+        cu_seqlens=cu, chunk_size=C,
+    )
+
+    NT1 = s1_len // C
+    atol, rtol = 1e-5, 1e-5
+    assert compare_tensor("seg1 dh", dh1, dh_p[:, :NT1], atol=atol, rtol=rtol)
+    assert compare_tensor("seg2 dh", dh2, dh_p[:, NT1:], atol=atol, rtol=rtol)
+    assert compare_tensor("seg1 dh0", dh01, dh0_p[:1], atol=atol, rtol=rtol)
+    assert compare_tensor("seg2 dh0", dh02, dh0_p[1:], atol=atol, rtol=rtol)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-x", "-v"])

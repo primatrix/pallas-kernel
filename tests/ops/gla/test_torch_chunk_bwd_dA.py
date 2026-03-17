@@ -131,5 +131,37 @@ def test_gold_vs_cpu(cfg):
     assert compare_tensor("dA", dA_gold, dA_cpu, atol=atol, rtol=rtol)
 
 
+# ============================================================================
+# Structural test — varlen packed vs separate
+# ============================================================================
+
+
+def test_varlen_packed_vs_separate():
+    """Backward dA: packed varlen (CPU cu_seqlens) == separate per-segment."""
+    torch.manual_seed(700)
+    H, K, V = 2, 32, 64
+    C = 64
+    s1_len, s2_len = 64, 128
+    scale = K**-0.5
+
+    v1 = torch.randn(1, s1_len, H, V)
+    do1 = torch.randn(1, s1_len, H, V)
+    v2 = torch.randn(1, s2_len, H, V)
+    do2 = torch.randn(1, s2_len, H, V)
+
+    dA1 = cpu_chunk_gla_bwd_dA(v1, do1, scale, chunk_size=C)
+    dA2 = cpu_chunk_gla_bwd_dA(v2, do2, scale, chunk_size=C)
+
+    v_cat = torch.cat([v1, v2], dim=1)
+    do_cat = torch.cat([do1, do2], dim=1)
+    cu = torch.tensor([0, s1_len, s1_len + s2_len], dtype=torch.long)
+
+    dA_p = cpu_chunk_gla_bwd_dA(v_cat, do_cat, scale, cu_seqlens=cu, chunk_size=C)
+
+    atol, rtol = 1e-5, 1e-5
+    assert compare_tensor("seg1 dA", dA1, dA_p[:, :s1_len], atol=atol, rtol=rtol)
+    assert compare_tensor("seg2 dA", dA2, dA_p[:, s1_len:], atol=atol, rtol=rtol)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-x", "-v"])

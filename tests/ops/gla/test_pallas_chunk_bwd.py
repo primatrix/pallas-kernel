@@ -38,15 +38,59 @@ CASES = [
     dict(B=2, T=32, H=4, K=32, V=64, seed=200, scale=0.1),
     dict(B=1, T=256, H=2, K=32, V=64, seed=300),
     dict(B=1, T=256, H=2, K=32, V=64, seed=303, h0=True, dht=True),
+    # ── non-default chunk_size ──
+    dict(B=2, T=64, H=4, K=32, V=64, seed=500, chunk_size=32),
+    dict(B=1, T=128, H=2, K=32, V=64, seed=501, chunk_size=8, h0=True, dht=True),
+    dict(B=2, T=128, H=4, K=32, V=64, seed=502, chunk_size=64),
+    dict(B=1, T=64, H=2, K=32, V=64, seed=503, chunk_size=4),
+    # ── varlen: equal segments ──
+    dict(B=1, T=32, H=4, K=32, V=64, seed=7, cu_seqlens=[0, 16, 32]),
+    dict(B=1, T=96, H=4, K=32, V=64, seed=10, cu_seqlens=[0, 32, 64, 96]),
+    # ── varlen: unequal (chunk-aligned) ──
+    dict(B=1, T=48, H=4, K=32, V=64, seed=11, cu_seqlens=[0, 16, 48]),
+    dict(B=1, T=64, H=2, K=16, V=32, seed=12, cu_seqlens=[0, 16, 48, 64]),
+    # ── varlen + h0 ──
+    dict(B=1, T=32, H=4, K=32, V=64, seed=17, cu_seqlens=[0, 16, 32], h0=True),
+    dict(B=1, T=48, H=4, K=32, V=64, seed=18, cu_seqlens=[0, 16, 48], h0=True),
+    # ── varlen + dht ──
+    dict(B=1, T=32, H=4, K=32, V=64, seed=19, cu_seqlens=[0, 16, 32], dht=True),
+    # ── varlen + h0 + dht ──
+    dict(B=1, T=48, H=4, K=32, V=64, seed=20, cu_seqlens=[0, 16, 48], h0=True, dht=True),
+    # ── varlen: minimum-size segments ──
+    dict(B=1, T=64, H=2, K=16, V=32, seed=22, cu_seqlens=[0, 16, 32, 48, 64]),
+    # ── varlen: long + short ──
+    dict(B=1, T=80, H=2, K=32, V=64, seed=25, cu_seqlens=[0, 16, 80]),
+    dict(B=1, T=64, H=2, K=32, V=64, seed=26, cu_seqlens=[0, 48, 64]),
+    # ── varlen: many segments ──
+    dict(B=1, T=96, H=2, K=16, V=32, seed=30, cu_seqlens=[0, 16, 32, 48, 64, 80, 96]),
+    # ── varlen: single segment ──
+    dict(B=1, T=64, H=4, K=32, V=64, seed=35, cu_seqlens=[0, 64]),
+    # ── long + varlen ──
+    dict(B=1, T=256, H=2, K=32, V=64, seed=340, cu_seqlens=[0, 128, 256]),
+    dict(B=1, T=256, H=2, K=32, V=64, seed=342, cu_seqlens=[0, 128, 256], h0=True, dht=True),
+    # ── varlen + non-default chunk_size ──
+    dict(B=1, T=64, H=4, K=32, V=64, seed=510, chunk_size=32, cu_seqlens=[0, 32, 64]),
+    dict(B=1, T=64, H=2, K=16, V=32, seed=511, chunk_size=8, cu_seqlens=[0, 32, 64]),
+    # ── varlen: non-chunk-aligned segments (per-segment padding) ──
+    dict(B=1, T=30, H=4, K=16, V=32, seed=600, cu_seqlens=[0, 10, 30]),
+    dict(B=1, T=45, H=2, K=32, V=64, seed=601, cu_seqlens=[0, 20, 45]),
+    dict(B=1, T=50, H=2, K=16, V=32, seed=602, cu_seqlens=[0, 13, 37, 50]),
+    dict(B=1, T=30, H=4, K=16, V=32, seed=603, cu_seqlens=[0, 10, 30], h0=True),
+    dict(B=1, T=45, H=2, K=32, V=64, seed=604, cu_seqlens=[0, 20, 45], h0=True, dht=True),
 ]
 
 
 def _case_id(c):
     parts = [f"B{c['B']}_T{c['T']}_H{c['H']}_K{c['K']}_V{c['V']}"]
+    cs = c.get("chunk_size", 16)
+    if cs != 16:
+        parts.append(f"C{cs}")
     if c.get("h0"):
         parts.append("h0")
     if c.get("dht"):
         parts.append("dht")
+    if c.get("cu_seqlens"):
+        parts.append(f"segs{len(c['cu_seqlens']) - 1}")
     if c.get("scale") is not None:
         parts.append(f"scale={c['scale']}")
     return "-".join(parts)
@@ -60,7 +104,7 @@ def _torch_to_jax(t: torch.Tensor) -> jax.Array:
 def test_chunk_gla_bwd(cfg):
     B, T, H, K, V = cfg["B"], cfg["T"], cfg["H"], cfg["K"], cfg["V"]
     scale = cfg.get("scale", K**-0.5)
-    C = 16
+    C = cfg.get("chunk_size", 16)
 
     torch.manual_seed(cfg["seed"])
     q = torch.randn(B, T, H, K)
@@ -68,52 +112,43 @@ def test_chunk_gla_bwd(cfg):
     v = torch.randn(B, T, H, V)
     g = F.logsigmoid(torch.randn(B, T, H, K))
     do = torch.randn(B, T, H, V)
-    h0 = torch.randn(B, H, K, V) if cfg.get("h0") else None
-    dht = torch.randn(B, H, K, V) if cfg.get("dht") else None
+
+    cu_list = cfg.get("cu_seqlens")
+    cu = torch.tensor(cu_list, dtype=torch.long) if cu_list else None
+    N = len(cu_list) - 1 if cu_list else B
+
+    h0 = torch.randn(N, H, K, V) if cfg.get("h0") else None
+    dht = torch.randn(N, H, K, V) if cfg.get("dht") else None
 
     # Torch CPU (handles padding internally)
     dq_cpu, dk_cpu, dv_cpu, dg_cpu, dh0_cpu = cpu_chunk_gla_bwd(
         q.float(), k.float(), v.float(), g.float(),
-        None, scale, h0, None, None, do.float(), dht, chunk_size=C,
+        None, scale, h0, None, None, do.float(), dht,
+        cu_seqlens=cu, chunk_size=C,
     )
 
-    # JAX (caller must pad T to multiple of chunk_size)
-    NT = (T + C - 1) // C
-    T_padded = NT * C
-    if T_padded > T:
-        pad = T_padded - T
-        q = F.pad(q, (0, 0, 0, 0, 0, pad))
-        k = F.pad(k, (0, 0, 0, 0, 0, pad))
-        v = F.pad(v, (0, 0, 0, 0, 0, pad))
-        g = F.pad(g, (0, 0, 0, 0, 0, pad))
-        do = F.pad(do, (0, 0, 0, 0, 0, pad))
-
+    # JAX (handles padding internally)
     q_j, k_j, v_j = _torch_to_jax(q), _torch_to_jax(k), _torch_to_jax(v)
     g_j = _torch_to_jax(g)
     do_j = _torch_to_jax(do)
     h0_j = _torch_to_jax(h0) if h0 is not None else None
     dht_j = _torch_to_jax(dht) if dht is not None else None
+    cu_j = jnp.array(cu_list, dtype=jnp.int32) if cu_list else None
 
     dq_jax, dk_jax, dv_jax, dg_jax, dh0_jax = jax_chunk_gla_bwd(
         q_j, k_j, v_j, g_j,
         g_cumsum=None, scale=scale,
         initial_state=h0_j, h=None, A=None,
-        do=do_j, dht=dht_j, chunk_size=C,
+        do=do_j, dht=dht_j,
+        cu_seqlens=cu_j, chunk_size=C,
     )
 
-    # Slice back to original T for comparison
-    dq_jax = dq_jax[:, :T]
-    dk_jax = dk_jax[:, :T]
-    dv_jax = dv_jax[:, :T]
-    dg_jax = dg_jax[:, :T]
-
-    # Tight tolerance for dq, dk (same computation graph, minimal drift)
-    assert compare_tensor("dq", dq_cpu, dq_jax, atol=1e-5, rtol=1e-5)
-    assert compare_tensor("dk", dk_cpu, dk_jax, atol=1e-5, rtol=1e-5)
-    # Slightly relaxed for dg (reverse cumsum accumulates small float32 differences)
-    assert compare_tensor("dg", dg_cpu, dg_jax, atol=5e-5, rtol=5e-5)
-    # Relaxed tolerance for dv (accumulates precision differences from h, dh, A intermediates)
-    assert compare_tensor("dv", dv_cpu, dv_jax, atol=5e-2, rtol=5e-2)
+    # fp32 end-to-end tolerance: 2e-5 accounts for accumulated rounding
+    # across independently-computed intermediates (h, dh, A)
+    assert compare_tensor("dq", dq_cpu, dq_jax, atol=2e-5, rtol=1e-5)
+    assert compare_tensor("dk", dk_cpu, dk_jax, atol=2e-5, rtol=1e-5)
+    assert compare_tensor("dg", dg_cpu, dg_jax, atol=5e-5, rtol=1e-5)
+    assert compare_tensor("dv", dv_cpu, dv_jax, atol=2e-5, rtol=1e-5)
     if dh0_cpu is not None:
         assert compare_tensor("dh0", dh0_cpu, dh0_jax, atol=1e-5, rtol=1e-5)
 

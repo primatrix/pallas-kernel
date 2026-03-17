@@ -29,7 +29,6 @@ def _chunk_fwd_h_kernel(
 ):
     T_sum, BK = k_ref.shape[1], k_ref.shape[2]
     BV = v_ref.shape[2]
-    N = h0_ref.shape[0]
     NT = pl.cdiv(T_sum, BT)
     NTS = BS // BT
     b_h_start = jnp.zeros((BK, BV), dtype=jnp.float32)
@@ -310,7 +309,13 @@ def chunk_fwd_h_ref(
                     b_gk_last[None, :, :] - b_gk
                 )  # b_gk_last -> [C, H, K]
 
-            h = h + jnp.einsum("chk,chv->hkv", b_k, b_v)
+            h = h + lax.dot_general(
+                b_k,
+                b_v,
+                dimension_numbers=(((0,), (0,)), ((1,), (1,))),
+                precision=lax.Precision.HIGHEST,
+                preferred_element_type=jnp.float32,
+            )
         if output_final_state:
             ht = ht.at[i_n].set(h.astype(ht.dtype))
 

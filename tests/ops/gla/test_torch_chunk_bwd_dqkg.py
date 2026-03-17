@@ -174,5 +174,76 @@ def test_gold_vs_cpu(cfg):
     assert compare_tensor("dg", dg_gold, dg_cpu, atol=atol, rtol=rtol)
 
 
+# ============================================================================
+# Structural test — varlen packed vs separate
+# ============================================================================
+
+
+def test_varlen_packed_vs_separate():
+    """Backward dqkg: packed varlen (CPU cu_seqlens) == separate per-segment."""
+    torch.manual_seed(740)
+    H, K, V = 2, 32, 64
+    C = 64
+    s1_len, s2_len = 64, 128
+    scale = K**-0.5
+
+    q1 = torch.randn(1, s1_len, H, K)
+    k1 = torch.randn(1, s1_len, H, K)
+    v1 = torch.randn(1, s1_len, H, V)
+    g1 = F.logsigmoid(torch.randn(1, s1_len, H, K))
+    do1 = torch.randn(1, s1_len, H, V)
+
+    q2 = torch.randn(1, s2_len, H, K)
+    k2 = torch.randn(1, s2_len, H, K)
+    v2 = torch.randn(1, s2_len, H, V)
+    g2 = F.logsigmoid(torch.randn(1, s2_len, H, K))
+    do2 = torch.randn(1, s2_len, H, V)
+
+    # Per-segment: compute all intermediates and dqkg separately
+    gc1 = cpu_chunk_local_cumsum(g1, C)
+    h1, _ = cpu_chunk_fwd_h(k1, v1, gc1, chunk_size=C)
+    dh1, _ = cpu_chunk_bwd_dh(q1, k1, v1, gc1, do1, scale=scale, chunk_size=C)
+    dA1 = cpu_chunk_gla_bwd_dA(v1, do1, scale, chunk_size=C)
+    dqi1, dki1 = cpu_chunk_gla_bwd_dqk_intra(q1, k1, gc1, dA1, chunk_size=C)
+    dq1, dk1, dg1 = cpu_chunk_gla_bwd_dqkg(
+        q1, k1, v1, h1, gc1, do1, dh1, dqi1, dki1, scale, chunk_size=C,
+    )
+
+    gc2 = cpu_chunk_local_cumsum(g2, C)
+    h2, _ = cpu_chunk_fwd_h(k2, v2, gc2, chunk_size=C)
+    dh2, _ = cpu_chunk_bwd_dh(q2, k2, v2, gc2, do2, scale=scale, chunk_size=C)
+    dA2 = cpu_chunk_gla_bwd_dA(v2, do2, scale, chunk_size=C)
+    dqi2, dki2 = cpu_chunk_gla_bwd_dqk_intra(q2, k2, gc2, dA2, chunk_size=C)
+    dq2, dk2, dg2 = cpu_chunk_gla_bwd_dqkg(
+        q2, k2, v2, h2, gc2, do2, dh2, dqi2, dki2, scale, chunk_size=C,
+    )
+
+    # Packed
+    cu = torch.tensor([0, s1_len, s1_len + s2_len], dtype=torch.long)
+    q_cat = torch.cat([q1, q2], dim=1)
+    k_cat = torch.cat([k1, k2], dim=1)
+    v_cat = torch.cat([v1, v2], dim=1)
+    gc_cat = torch.cat([gc1, gc2], dim=1)
+    do_cat = torch.cat([do1, do2], dim=1)
+    h_cat = torch.cat([h1, h2], dim=1)       # [1, NT_total, H, K, V]
+    dh_cat = torch.cat([dh1, dh2], dim=1)
+    dqi_cat = torch.cat([dqi1, dqi2], dim=1)
+    dki_cat = torch.cat([dki1, dki2], dim=1)
+
+    dq_p, dk_p, dg_p = cpu_chunk_gla_bwd_dqkg(
+        q_cat, k_cat, v_cat, h_cat, gc_cat, do_cat, dh_cat,
+        dqi_cat, dki_cat, scale,
+        cu_seqlens=cu, chunk_size=C,
+    )
+
+    atol, rtol = 1e-5, 1e-5
+    assert compare_tensor("seg1 dq", dq1, dq_p[:, :s1_len], atol=atol, rtol=rtol)
+    assert compare_tensor("seg2 dq", dq2, dq_p[:, s1_len:], atol=atol, rtol=rtol)
+    assert compare_tensor("seg1 dk", dk1, dk_p[:, :s1_len], atol=atol, rtol=rtol)
+    assert compare_tensor("seg2 dk", dk2, dk_p[:, s1_len:], atol=atol, rtol=rtol)
+    assert compare_tensor("seg1 dg", dg1, dg_p[:, :s1_len], atol=atol, rtol=rtol)
+    assert compare_tensor("seg2 dg", dg2, dg_p[:, s1_len:], atol=atol, rtol=rtol)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-x", "-v"])

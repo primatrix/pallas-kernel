@@ -117,6 +117,12 @@ CASES = [
         h0=True,
         cu_seqlens=[0, 64, 192, 256],
     ),
+    # ── varlen: non-chunk-aligned segments (per-segment padding) ──
+    dict(B=1, T=30, H=2, K=32, V=64, seed=400, cu_seqlens=[0, 10, 30]),
+    dict(B=1, T=45, H=2, K=32, V=64, seed=401, cu_seqlens=[0, 20, 45]),
+    dict(B=1, T=50, H=2, K=16, V=32, seed=402, cu_seqlens=[0, 13, 37, 50]),
+    dict(B=1, T=30, H=4, K=16, V=32, seed=403, cu_seqlens=[0, 10, 30], h0=True),
+    dict(B=1, T=45, H=2, K=32, V=64, seed=404, cu_seqlens=[0, 20, 45], h0=True),
 ]
 
 

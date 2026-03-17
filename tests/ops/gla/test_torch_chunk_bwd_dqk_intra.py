@@ -74,8 +74,8 @@ CASES = [
     dict(B=2, T=64, H=4, K=32, V=64, seed=200, scale=0.1),
     # ── long sequence ──
     dict(B=1, T=256, H=2, K=32, V=64, seed=300),
-    # ── K >> V ──
-    dict(B=2, T=64, H=4, K=128, V=16, seed=21),
+    # ── K == V ──
+    dict(B=2, T=64, H=4, K=64, V=64, seed=22),
     # ── non-default chunk_size ──
     dict(B=2, T=64, H=4, K=32, V=64, seed=500, chunk_size=16),
     dict(B=1, T=128, H=2, K=32, V=64, seed=501, chunk_size=32),
@@ -143,6 +143,58 @@ def test_gold_vs_cpu(cfg):
 
     assert compare_tensor("dq_intra", dq_gold, dq_cpu, atol=atol, rtol=rtol)
     assert compare_tensor("dk_intra", dk_gold, dk_cpu, atol=atol, rtol=rtol)
+
+
+# ============================================================================
+# Structural test — varlen packed vs separate
+# ============================================================================
+
+
+def test_varlen_packed_vs_separate():
+    """Backward dqk_intra: packed varlen (CPU cu_seqlens) == separate per-segment."""
+    torch.manual_seed(710)
+    H, K, V = 2, 32, 64
+    C = 64
+    s1_len, s2_len = 64, 128
+    scale = K**-0.5
+
+    q1 = torch.randn(1, s1_len, H, K)
+    k1 = torch.randn(1, s1_len, H, K)
+    v1 = torch.randn(1, s1_len, H, V)
+    g1 = F.logsigmoid(torch.randn(1, s1_len, H, K))
+    do1 = torch.randn(1, s1_len, H, V)
+
+    q2 = torch.randn(1, s2_len, H, K)
+    k2 = torch.randn(1, s2_len, H, K)
+    v2 = torch.randn(1, s2_len, H, V)
+    g2 = F.logsigmoid(torch.randn(1, s2_len, H, K))
+    do2 = torch.randn(1, s2_len, H, V)
+
+    # Per-segment
+    gc1 = cpu_chunk_local_cumsum(g1, C)
+    dA1 = cpu_chunk_gla_bwd_dA(v1, do1, scale, chunk_size=C)
+    dq1, dk1 = cpu_chunk_gla_bwd_dqk_intra(q1, k1, gc1, dA1, chunk_size=C)
+
+    gc2 = cpu_chunk_local_cumsum(g2, C)
+    dA2 = cpu_chunk_gla_bwd_dA(v2, do2, scale, chunk_size=C)
+    dq2, dk2 = cpu_chunk_gla_bwd_dqk_intra(q2, k2, gc2, dA2, chunk_size=C)
+
+    # Packed
+    cu = torch.tensor([0, s1_len, s1_len + s2_len], dtype=torch.long)
+    q_cat = torch.cat([q1, q2], dim=1)
+    k_cat = torch.cat([k1, k2], dim=1)
+    gc_cat = torch.cat([gc1, gc2], dim=1)
+    dA_cat = torch.cat([dA1, dA2], dim=1)
+
+    dq_p, dk_p = cpu_chunk_gla_bwd_dqk_intra(
+        q_cat, k_cat, gc_cat, dA_cat, cu_seqlens=cu, chunk_size=C,
+    )
+
+    atol, rtol = 1e-5, 1e-5
+    assert compare_tensor("seg1 dq", dq1, dq_p[:, :s1_len], atol=atol, rtol=rtol)
+    assert compare_tensor("seg2 dq", dq2, dq_p[:, s1_len:], atol=atol, rtol=rtol)
+    assert compare_tensor("seg1 dk", dk1, dk_p[:, :s1_len], atol=atol, rtol=rtol)
+    assert compare_tensor("seg2 dk", dk2, dk_p[:, s1_len:], atol=atol, rtol=rtol)
 
 
 if __name__ == "__main__":
