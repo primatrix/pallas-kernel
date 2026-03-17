@@ -446,7 +446,7 @@ def chunk_fwd_h_kernel_with_same_seq(
             h0,
             True,
             chunk_size=64,
-            kernel_inputs_specs=in_specs,
+            kernel_inputs_specs=(k, v, gk, h0),
             kernel_outputs_specs=out_shape,
         )
     )(k, v, h0, gk)
