@@ -69,7 +69,7 @@ def _chunk_fwd_h_kernel(
         v = v_ref[(0, pl.dslice(t0, BT), slice(None))]  # [BT,BV]
         if gk_ref is not None:
             gk = gk_ref[(0, pl.dslice(t0, BT), slice(None))]  # [BT,BK]
-            g_last = gk[-1, :]
+            g_last = gk[BT-1, :]
             decay = jnp.exp(g_last)
             b_h = b_h * decay[:, None]  # [BK, BV] * [BK,1]
             k = (k * jnp.exp(g_last[None, :] - gk)).astype(k.dtype)
