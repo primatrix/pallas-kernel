@@ -257,8 +257,8 @@ def _chunk_fwd_h_kernel_with_same_seq(
     if h0_ref is not None:
         b_h = h0_ref[0, 0]
     
-    @pl.loop(0, NT, step=1, unroll=True)
-    def body(i_t):
+    def body(i_t, carry):
+        b_h = carry
         i_s = i_t // NTS
         @pl.when((i_t % NTS) == 0)
         def store_fn():
@@ -275,7 +275,7 @@ def _chunk_fwd_h_kernel_with_same_seq(
         b_h = b_h + jax.lax.dot(k_tile.T, v_tile)      
         
 
-    # b_h = lax.fori_loop(0, NT, body, b_h)
+    b_h = lax.fori_loop(0, NT, body, b_h)
     if ht_ref is not None:
         ht_ref[0, 0] = b_h
 
