@@ -733,7 +733,7 @@ def chunk_gla_bwd_dqkg_ref(
 
     # Reverse cumsum over time dimension within each chunk
     dg = (
-        jnp.cumsum(dg_raw[:, :, ::-1, :, :], axis=2)[:, :, ::-1, :, :]
+        rev_cumsum
         + dgk_inter[:, :, None, :, :]
     )
 
@@ -1538,6 +1538,7 @@ def chunk_gla_bwd_fused_kernel(
 
     # 5. dg
     dgk_inter = jnp.exp(b_gn) * jnp.sum(b_h * b_dh, axis=1) + jnp.sum(b_dk_inter * b_k.astype(jnp.float32), axis=0)
+    # jax.debug.print("dgk_inter: {dgk_inter_max}, {dgk_inter_min}", dgk_inter_max=dgk_inter.max(), dgk_inter_min=dgk_inter.min())
     dg_raw = b_q.astype(jnp.float32) * b_dq - b_k.astype(jnp.float32) * b_dk
 
     # Use upper triangular matrix multiplication for reverse cumsum
