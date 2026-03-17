@@ -17,10 +17,10 @@ from flax import nnx
 
 # =============================================================================
 
-from pallas_kernel.modules.layernorm import RMSNorm
-from pallas_kernel.modules.fused_norm_gate import FusedRMSNormGated
-from pallas_kernel.modules.convolution import ShortConvolution
-from pallas_kernel.ops.gla import chunk_gla, fused_recurrent_gla, fused_chunk_gla
+from tops.modules.layernorm import RMSNorm
+from tops.modules.fused_norm_gate import FusedRMSNormGated
+from tops.modules.convolution import ShortConvolution
+from tops.ops.gla import chunk_gla, fused_recurrent_gla, fused_chunk_gla
 
 ACT2FN = {
     "swish": jax.nn.swish,

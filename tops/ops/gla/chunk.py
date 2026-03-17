@@ -7,9 +7,9 @@ import jax.numpy as jnp
 import numpy as np
 from jax.experimental.pallas import dslice
 from jax.experimental.pallas import tpu as pltpu
-from pallas_kernel.utils import pad_to_multiple, prepare_chunk_indices
-from pallas_kernel.ops.utils import is_tpu_runtime
-from pallas_kernel.ops.common.chunk_h import chunk_fwd_h_kernel
+from tops.utils import pad_to_multiple, prepare_chunk_indices
+from tops.ops.utils import is_tpu_runtime
+from tops.ops.common.chunk_h import chunk_fwd_h_kernel
 
 
 # =============================================================================
@@ -848,7 +848,7 @@ def chunk_gla_bwd(
     Returns:
         (dq, dk, dv, dg, dh0)
     """
-    from pallas_kernel.ops.common.chunk_h import chunk_bwd_dh_ref
+    from tops.ops.common.chunk_h import chunk_bwd_dh_ref
 
     B, T, H, K = q.shape
     V = v.shape[-1]

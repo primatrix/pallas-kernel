@@ -1,4 +1,4 @@
-# pallas-kernel
+# tops
 
 JAX/Flax Pallas kernels for Gated Linear Attention (GLA).
 
@@ -23,13 +23,13 @@ pip install .
 For GPU support (CUDA 12):
 
 ```bash
-pip install "pallas-kernel[gpu] @ git+https://github.com/primatrix/pallas-kernel.git"
+pip install "tops[gpu] @ git+https://github.com/primatrix/pallas-kernel.git"
 ```
 
 For TPU support:
 
 ```bash
-pip install "pallas-kernel[tpu] @ git+https://github.com/primatrix/pallas-kernel.git"
+pip install "tops[tpu] @ git+https://github.com/primatrix/pallas-kernel.git"
 ```
 
 For development:
@@ -50,9 +50,9 @@ Use the provided build script to create distributable packages:
 ## Usage
 
 ```python
-from pallas_kernel.ops.gla import chunk_gla, fused_recurrent_gla, fused_chunk_gla
-from pallas_kernel.layers.gla import GatedLinearAttention
-from pallas_kernel.modules.layernorm import RMSNorm
+from tops.ops.gla import chunk_gla, fused_recurrent_gla, fused_chunk_gla
+from tops.layers.gla import GatedLinearAttention
+from tops.modules.layernorm import RMSNorm
 ```
 
 ## License

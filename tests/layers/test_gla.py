@@ -26,23 +26,23 @@ import jax.numpy as jnp
 from flax import nnx
 
 # Import both implementations
-from pallas_kernel.torch.ops.gla import (
+from tops.torch.ops.gla import (
     naive_recurrent_gla as torch_naive_recurrent_gla,
     chunk_gla as torch_chunk_gla,
     fused_chunk_gla as torch_fused_chunk_gla,
 )
 
-from pallas_kernel.torch.layers.gla import GatedLinearAttention as TorchGLA
+from tops.torch.layers.gla import GatedLinearAttention as TorchGLA
 
-from pallas_kernel.torch.modules.convolution import ShortConvolution as TorchShortConv
-from pallas_kernel.torch.modules.layernorm import RMSNorm as TorchRMSNorm
-from pallas_kernel.torch.modules.fused_norm_gate import FusedRMSNormGated as TorchFNG
+from tops.torch.modules.convolution import ShortConvolution as TorchShortConv
+from tops.torch.modules.layernorm import RMSNorm as TorchRMSNorm
+from tops.torch.modules.fused_norm_gate import FusedRMSNormGated as TorchFNG
 
-from pallas_kernel.jax.ops.gla import naive_recurrent_gla as jax_naive_recurrent_gla
-from pallas_kernel.jax.layers.gla import GatedLinearAttention as JaxGLA
-from pallas_kernel.jax.modules.layernorm import RMSNorm as JaxRMSNorm
-from pallas_kernel.jax.modules.fused_norm_gate import FusedRMSNormGated as JaxFusedRMSNormGated
-from pallas_kernel.jax.modules.convolution import ShortConvolution as JaxShortConv
+from tops.jax.ops.gla import naive_recurrent_gla as jax_naive_recurrent_gla
+from tops.jax.layers.gla import GatedLinearAttention as JaxGLA
+from tops.jax.modules.layernorm import RMSNorm as JaxRMSNorm
+from tops.jax.modules.fused_norm_gate import FusedRMSNormGated as JaxFusedRMSNormGated
+from tops.jax.modules.convolution import ShortConvolution as JaxShortConv
 
 
 # =============================================================================
@@ -1081,7 +1081,7 @@ def run_test_attention_mask_pipeline() -> bool:
 
     Tests: get_unpad_data, index_first_axis, pad_input pipeline.
     """
-    from pallas_kernel.torch.layers.utils import (
+    from tops.torch.layers.utils import (
         get_unpad_data,
         index_first_axis,
         pad_input,
