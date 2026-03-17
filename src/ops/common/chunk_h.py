@@ -248,8 +248,7 @@ def _chunk_fwd_h_kernel_with_same_seq(
     BT,
     BS,
 ):
-    b_i, b_j, b_k = pl.program_id(0), pl.program_id(1), pl.program_id(3)
-    b_v = pl.program_id(3)
+    b_i, b_j, b_k, b_v = pl.program_id(0), pl.program_id(1), pl.program_id(2), pl.program_id(3)
 
     T, BK = k_ref.shape[2], h0_ref.shape[2]
     BV = h0_ref.shape[3]
