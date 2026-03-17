@@ -232,23 +232,22 @@ def chunk_fwd_h_kernel(
 
 
 def _chunk_fwd_h_kernel_with_same_seq(
-    k_ref,  # [B, H, T, BK]
-    v_ref,  # [B, H, T, BV]
+    k_ref,  # [1, 1, T, BK]
+    v_ref,  # [1, 1, T, BV]
     h0_ref,  # [1, 1, BK, BV]
-    gk_ref,  # [B, H, T, BK]
+    gk_ref,  # [1, 1, T, BK]
     h_ref,  # [1, NS, 1, BK, BV]
     ht_ref,  # [1, 1, BK , BV]
-    k_scratch_ref,
-    v_scratch_ref,
-    gk_scratch_ref,
-    local_copy_sem0,
-    local_copy_sem1,
-    local_copy_sem2,
+    # k_scratch_ref,
+    # v_scratch_ref,
+    # gk_scratch_ref,
+    # local_copy_sem0,
+    # local_copy_sem1,
+    # local_copy_sem2,
     *,
     BT,
     BS,
 ):
-    b_i, b_j, b_k, b_v = pl.program_id(0), pl.program_id(1), pl.program_id(2), pl.program_id(3)
 
     T, BK = k_ref.shape[2], h0_ref.shape[2]
     BV = h0_ref.shape[3]
@@ -257,73 +256,18 @@ def _chunk_fwd_h_kernel_with_same_seq(
     b_h = jnp.zeros((BK, BV), dtype=jnp.float32)
     if h0_ref is not None:
         b_h = h0_ref[0, 0]
-    k_slice = pl.dslice(b_k * BK, BK)
-    v_slice = pl.dslice(b_v * BV, BV)
-    copy_k0 = pltpu.make_async_copy(
-        k_ref.at[(b_i, b_j,  pl.dslice(0, BT), k_slice)],
-        k_scratch_ref.at[0],
-        local_copy_sem0,
-    )
-    copy_k0.start()
-
-    copy_v0 = pltpu.make_async_copy(
-        v_ref.at[(b_i, b_j,  pl.dslice(0, BT), v_slice)],
-        v_scratch_ref.at[0],
-        local_copy_sem1,
-    )
-    copy_v0.start()
-
-    if gk_ref is not None:
-        copy_gk0 = pltpu.make_async_copy(
-            gk_ref.at[(b_i, b_j,  pl.dslice(0, BT), k_slice)],
-            gk_scratch_ref.at[0],
-            local_copy_sem2,
-        )
-        copy_gk0.start()
-
+    
+    @pl.loop(0, NT, step=1, unroll=True)
     def body(i_t, carry):
         b_h = carry
-        buf = jnp.mod(i_t , 2)
-        next_buf = jnp.mod(i_t + 1,  2)
-        copy_k0.wait()
-        copy_v0.wait()
-        if gk_ref is not None:
-             copy_gk0.wait()
         i_s = i_t // NTS
         @pl.when((i_t % NTS) == 0)
         def store_fn():
             h_ref[0, i_s, 0] = b_h
-        
-        @pl.when(i_t + 1 < NT)
-        def do_prefetch():
-            t0 = (i_t + 1) * BT
-            pl_dslice = pl.dslice(t0, BT)
-            k_dslice = pl.dslice(b_k * BK, BK)
-            v_dslice = pl.dslice(b_v * BV, BV)
-            copy_k0 = pltpu.make_async_copy(
-                k_ref.at[(b_i, b_j,  pl_dslice, k_dslice)],
-                k_scratch_ref.at[next_buf],
-                local_copy_sem0,
-            )
-            copy_k0.start()
-            copy_v0 = pltpu.make_async_copy(
-                v_ref.at[(b_i, b_j, pl_dslice, v_dslice)],
-                v_scratch_ref.at[next_buf],
-                local_copy_sem1,
-            )
-            copy_v0.start()
-
-            if gk_ref is not None:
-                copy_gk0 = pltpu.make_async_copy(
-                    gk_ref.at[(b_i, b_j,  pl_dslice, k_dslice)],
-                    gk_scratch_ref.at[next_buf],
-                    local_copy_sem2,
-                )
-                copy_gk0.start()   
-        k_tile = k_scratch_ref[buf]
-        v_tile = v_scratch_ref[buf]
+        k_tile = k_ref[0, 0]
+        v_tile = v_ref[0, 0]
         if gk_ref is not None:
-            gk_tile = gk_scratch_ref[buf]
+            gk_tile = gk_ref[0, 0]
             g_last = gk_tile[-1, :]
             decay = jnp.exp(g_last)
             b_h = b_h * decay[:, None]  # [BK, BV] * [BK,1]
@@ -333,7 +277,7 @@ def _chunk_fwd_h_kernel_with_same_seq(
         
         return b_h
 
-    b_h = lax.fori_loop(0, NT, body, b_h)
+    # b_h = lax.fori_loop(0, NT, body, b_h)
     if ht_ref is not None:
         ht_ref[0, 0] = b_h
 
@@ -391,7 +335,7 @@ def chunk_fwd_h_kernel_with_same_seq(
     if gk is not None:
         gk = jnp.transpose(gk, (0, 2, 1, 3))  # (B,H,T,K)
 
-    grid = (B , H, pl.cdiv(K, BK), pl.cdiv(V, BV))
+    grid = (H, pl.cdiv(K, BK), pl.cdiv(V, BV))
 
     def k_index_map(batch_index, head_index, k_index, _):
         return batch_index, head_index, 0, k_index
@@ -425,22 +369,22 @@ def chunk_fwd_h_kernel_with_same_seq(
         out_specs.append(None)
 
     in_specs = [
-        pl.BlockSpec(memory_space=pltpu.HBM),
-        pl.BlockSpec(memory_space=pltpu.HBM),
+        pl.BlockSpec(pl.BlockSpec((1, 1, BT, BK), k_index_map)),
+        pl.BlockSpec(pl.BlockSpec((1, 1, BT, BV), v_index_map)),
     ]
-    k_scratch = pltpu.VMEM((2, BT, BK), jnp.float32)
-    v_scratch = pltpu.VMEM((2, BT, BV), jnp.float32)
-    scratch_shapes = [k_scratch, v_scratch]
+    # k_scratch = pltpu.VMEM((2, BT, BK), jnp.float32)
+    # v_scratch = pltpu.VMEM((2, BT, BV), jnp.float32)
+    # scratch_shapes = [k_scratch, v_scratch]
     if h0 is not None:
         in_specs.append(pl.BlockSpec((1, 1, BK, BV), h0_index_map))
     else:
         in_specs.append(None)
     if gk is not None:
-        in_specs.append(pl.BlockSpec(memory_space=pltpu.HBM))
-        gk_scratch = pltpu.VMEM((2, BT, BK), jnp.float32)
-        scratch_shapes.append(gk_scratch)
+        in_specs.append(pl.BlockSpec(pl.BlockSpec((1, 1, BT, BK), gk_index_map)))
+        # gk_scratch = pltpu.VMEM((2, BT, BK), jnp.float32)
+        # scratch_shapes.append(gk_scratch)
     else:
-        scratch_shapes.append(None)
+        # scratch_shapes.append(None)
         in_specs.append(None)
 
     kernel = functools.partial(
@@ -448,7 +392,7 @@ def chunk_fwd_h_kernel_with_same_seq(
         BT=BT,
         BS=BS,
     )
-    scratch_shapes.extend([pltpu.SemaphoreType.DMA] * 3)
+    # scratch_shapes.extend([pltpu.SemaphoreType.DMA] * 3)
     h, ht = pl.pallas_call(
         kernel,
         grid_spec=pltpu.PrefetchScalarGridSpec(
@@ -456,16 +400,6 @@ def chunk_fwd_h_kernel_with_same_seq(
             grid=grid,
             in_specs=in_specs,
             out_specs=out_specs,
-            scratch_shapes=(
-              # DMA semaphores are allocated in scratch memory.
-              # We allocated one semaphore for a local HBM-VMEM copy,
-              # and one for the remote send semaphore.
-              scratch_shapes
-              # We additionally allocate one receive semaphore per device.
-              # This is to avoid situations where we have multiple
-              # DMAs in flight, as we do not want to share a receive
-              # semaphore between the DMAs.
-            )
         ),
         out_shape=out_shape,
         interpret=interpret,
