@@ -299,7 +299,7 @@ def _fwd_cost_estimate(
     kernel_outputs_specs,
 ) -> pl.CostEstimate | None:
     body_cost = pl.estimate_cost(
-        chunk_fwd_h_ref, k, v, gk, h0, output_final_state
+        chunk_fwd_h_ref, k, v, gk, h0
     )
     input_bytes = sum(_bytes(x) for x in jax.tree.leaves(kernel_inputs_specs))
     output_bytes = sum(_bytes(x) for x in jax.tree.leaves(kernel_outputs_specs))
@@ -459,7 +459,7 @@ def chunk_fwd_h_ref(
     v: jax.Array,
     gk: jax.Array | None = None,
     h0: jax.Array | None = None,
-    output_final_state: bool = False,
+    output_final_state: bool = True,
     cu_seqlens_cpu: jax.Array | None = None,
     chunk_size: int = 64,
 ) -> tuple[jax.Array, jax.Array | None]:
