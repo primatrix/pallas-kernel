@@ -263,6 +263,7 @@ def _chunk_fwd_h_kernel_with_same_seq(
         @pl.when((i_t % NTS) == 0)
         def store_fn():
             h_ref[0, i_s, 0] = b_h
+
         t_slice = pl.dslice(i_t * BT, BT)
         k_tile = k_ref[(0, 0, t_slice, slice(None))]
         v_tile = v_ref[(0, 0, t_slice, slice(None))]
@@ -369,8 +370,8 @@ def chunk_fwd_h_kernel_with_same_seq(
         out_specs.append(None)
 
     in_specs = [
-        pl.BlockSpec((1, 1, BT, BK), k_index_map),
-        pl.BlockSpec((1, 1, BT, BV), v_index_map),
+        pl.BlockSpec((1, 1, T, BK), k_index_map),
+        pl.BlockSpec((1, 1, T, BV), v_index_map),
     ]
     # k_scratch = pltpu.VMEM((2, BT, BK), jnp.float32)
     # v_scratch = pltpu.VMEM((2, BT, BV), jnp.float32)
@@ -380,7 +381,7 @@ def chunk_fwd_h_kernel_with_same_seq(
     else:
         in_specs.append(None)
     if gk is not None:
-        in_specs.append(pl.BlockSpec((1, 1, BT, BK), gk_index_map))
+        in_specs.append(pl.BlockSpec((1, 1, T, BK), gk_index_map))
         # gk_scratch = pltpu.VMEM((2, BT, BK), jnp.float32)
         # scratch_shapes.append(gk_scratch)
     else:
