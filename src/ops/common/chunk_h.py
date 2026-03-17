@@ -75,7 +75,7 @@ def _chunk_fwd_h_kernel(
             k = (k * jnp.exp(g_last[None, :] - gk)).astype(k.dtype)
 
         # state update
-        b_h = b_h + jax.lax.dot(k.T, v)
+        b_h = b_h + jax.lax.dot(k.T, v, precision=lax.Precision.HIGHEST)
 
         eos = cu_seqlens_ref[seq_idx + 1]
 
