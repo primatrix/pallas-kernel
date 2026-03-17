@@ -411,7 +411,6 @@ def chunk_fwd_h_kernel_with_same_seq(
         compiler_params=pltpu.CompilerParams(
             dimension_semantics=(
                 "parallel",
-                "parallel",
                 "arbitrary",
                 "arbitrary",
             ),
