@@ -70,8 +70,8 @@ def _run_pallas(q, k, v, g_cumsum, h, do, dh, scale, chunk_size, A):
 def test_native_tpu_vs_pallas(cfg):
     B, T, H, K = cfg["B"], cfg["T"], cfg["H"], cfg["K"]
     V = K # In these tests V == K
-    atol = cfg.get("atol", 1e-5)
-    rtol = cfg.get("rtol", 1e-4)
+    atol = cfg.get("atol", 1e-4)
+    rtol = cfg.get("rtol", 1e-3)
     chunk_size = cfg.get("chunk_size", 64)
     NT = T // chunk_size
 

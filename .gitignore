@@ -24,3 +24,8 @@ Thumbs.db
 
 # Jupyter
 .ipynb_checkpoints/
+
+# logs and temporary files
+*.log
+.cluster_name_gpu
+.cluster_name_tpu

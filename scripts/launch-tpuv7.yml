@@ -30,7 +30,7 @@ spec:
           # 2. 扫描 GitHub 指纹避免交互式确认
           ssh-keyscan github.com >> ~/.ssh/known_hosts
 
-          pip install -U --pre jax jaxlib libtpu requests -i https://us-python.pkg.dev/ml-oss-artifacts-published/jax/simple/ -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
+          # pip install -U --pre jax jaxlib libtpu requests -i https://us-python.pkg.dev/ml-oss-artifacts-published/jax/simple/ -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
           pip install uv
 
           # git clone https://github.com/primatrix/ant-pretrain.git
