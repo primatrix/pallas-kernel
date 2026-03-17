@@ -28,8 +28,11 @@ if command -v uv &> /dev/null; then
     echo "Building with uv..."
     uv build
 elif command -v python3 &> /dev/null; then
+    if ! python3 -m build --help &> /dev/null; then
+        echo "Installing build tool..."
+        python3 -m pip install --quiet build
+    fi
     echo "Building with python -m build..."
-    python3 -m pip install --quiet build
     python3 -m build
 else
     echo "Error: neither uv nor python3 found on PATH." >&2
