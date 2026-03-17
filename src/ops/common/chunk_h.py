@@ -4,7 +4,7 @@ from jax import lax
 from jax.experimental import pallas as pl
 from jax.experimental.pallas import tpu as pltpu
 import functools
-
+import math
 
 def build_chunk_map(cu_seqlens, T_sum, BT):
     NT = T_sum // BT
@@ -284,6 +284,31 @@ def _chunk_fwd_h_kernel_with_same_seq(
     if ht_ref is not None:
         ht_ref[0, 0] = b_h
 
+def _bytes(x: jax.Array | jax.ShapeDtypeStruct) -> int:
+    return math.prod(x.shape) * x.dtype.itemsize
+
+
+def _fwd_cost_estimate(
+    k: jax.Array,
+    v: jax.Array,
+    gk: jax.Array | None,
+    h0: jax.Array | None,
+    output_final_state: bool | False,
+    cu_seqlens_cpu: jax.Array | None,
+    chunk_size: int,
+    kernel_inputs_specs,
+    kernel_outputs_specs,
+) -> pl.CostEstimate | None:
+    body_cost = pl.estimate_cost(
+        chunk_fwd_h_ref, k, v, gk, h0, output_final_state
+    )
+    input_bytes = sum(_bytes(x) for x in jax.tree.leaves(kernel_inputs_specs))
+    output_bytes = sum(_bytes(x) for x in jax.tree.leaves(kernel_outputs_specs))
+    return pl.CostEstimate(
+        flops=body_cost.flops,
+        transcendentals=body_cost.transcendentals,
+        bytes_accessed=input_bytes + output_bytes,
+    )
 
 @functools.partial(
     jax.jit,
@@ -415,6 +440,16 @@ def chunk_fwd_h_kernel_with_same_seq(
             ),
             vmem_limit_bytes=128 * 1024 * 1024,
         ),
+        cost_estimate=_fwd_cost_estimate(
+            k,
+            v,
+            gk,
+            h0,
+            True,
+            chunk_size=64,
+            kernel_inputs_specs=in_specs,
+            kernel_outputs_specs=out_shape,
+        )
     )(k, v, h0, gk)
     if output_final_state:
         return h, ht
