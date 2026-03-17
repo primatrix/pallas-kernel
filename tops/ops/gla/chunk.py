@@ -1075,6 +1075,76 @@ def chunk_gla_bwd_with_pl(
     return dq, dk, dv, dg, dh0
 
 
+def chunk_gla_bwd_with_pl(
+    q: jax.Array,
+    k: jax.Array,
+    v: jax.Array,
+    g: jax.Array,
+    g_cumsum: jax.Array | None,
+    scale: float,
+    initial_state: jax.Array | None,
+    h: jax.Array | None,
+    A: jax.Array | None,
+    do: jax.Array,
+    dht: jax.Array | None,
+    cu_seqlens: jax.Array | None = None,
+    chunk_size: int = 64,
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array | None]:
+    """Chunk GLA backward orchestrator using Pallas kernels."""
+    from src.ops.common.chunk_h import chunk_bwd_dh_kernel
+
+    B, T, H, K = q.shape
+    V = v.shape[-1]
+    C = chunk_size
+
+    assert T % C == 0, "T must be a multiple of chunk_size for chunk_gla_bwd_with_pl"
+    assert (cu_seqlens is None) or (cu_seqlens % C == 0).all(), (
+        "cu_seqlens must be multiples of chunk_size for chunk_gla_bwd_with_pl"
+    )
+
+    # 1. Chunk-local cumsum
+    if g_cumsum is None:
+        g_cumsum = chunk_local_cumsum_vector(g, C, cu_seqlens=cu_seqlens)
+
+    # 2. Forward replay to get h
+    if h is None:
+        h, _ = chunk_fwd_h_kernel(
+            k,
+            v,
+            gk=g_cumsum,
+            h0=initial_state,
+            output_final_state=False,
+            cu_seqlens=cu_seqlens,
+            chunk_size=C,
+        )
+        if cu_seqlens is None:
+            h = h.reshape(B, T // C, H, K, V)
+
+    # 3. Backward hidden state gradients
+    dh, dh0 = chunk_bwd_dh_kernel(
+        q,
+        k,
+        v,
+        gk=g_cumsum,
+        do=do,
+        dht=dht,
+        scale=scale,
+        cu_seqlens=cu_seqlens,
+        chunk_size=C,
+    )
+    if cu_seqlens is None:
+        dh = dh.reshape(B, T // C, H, K, V)
+        if dh0 is not None:
+            dh0 = dh0.reshape(B, H, K, V)
+
+    # 4. Fused backward pass for dq, dk, dv, dg
+    dq, dk, dv, dg = chunk_gla_bwd_fused_pl(
+        q, k, v, g_cumsum, h, do, dh, scale=scale, chunk_size=C
+    )
+
+    return dq, dk, dv, dg, dh0
+
+
 # =============================================================================
 # Orchestrator: chunk_gla_fwd
 # =============================================================================
