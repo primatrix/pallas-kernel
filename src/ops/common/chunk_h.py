@@ -272,7 +272,8 @@ def _chunk_fwd_h_kernel_with_same_seq(
             b_h = b_h * decay[:, None]  # [BK, BV] * [BK,1]
             k_tile = (k_tile * jnp.exp(g_last[None, :] - gk_tile)).astype(gk_tile.dtype)
 
-        b_h = b_h + jax.lax.dot(k_tile.T, v_tile)      
+        b_h = b_h + jax.lax.dot(k_tile.T, v_tile)   
+        return b_h   
         
 
     b_h = lax.fori_loop(0, NT, body, b_h)
