@@ -454,13 +454,6 @@ def chunk_fwd_h_kernel_with_same_seq(
         return h, ht
     return h, None
 
-@functools.partial(
-    jax.jit,
-    static_argnames=[
-        "output_final_state",
-        "chunk_size",
-    ],
-)
 def chunk_fwd_h_ref(
     k: jax.Array,
     v: jax.Array,
