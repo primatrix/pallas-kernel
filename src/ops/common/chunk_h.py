@@ -294,7 +294,6 @@ def _fwd_cost_estimate(
     gk: jax.Array | None,
     h0: jax.Array | None,
     output_final_state: bool,
-    cu_seqlens_cpu: jax.Array | None,
     chunk_size: int,
     kernel_inputs_specs,
     kernel_outputs_specs,
