@@ -440,9 +440,9 @@ def chunk_fwd_h_kernel_with_same_seq(
             vmem_limit_bytes=128 * 1024 * 1024,
         ),
         cost_estimate=_fwd_cost_estimate(
-            k,
-            v,
-            gk,
+            jnp.transpose(k, (0, 2, 1, 3)),
+            jnp.transpose(v, (0, 2, 1, 3)),
+            jnp.transpose(gk, (0, 2, 1, 3)) if gk is not None else None,
             h0,
             True,
             chunk_size=64,
