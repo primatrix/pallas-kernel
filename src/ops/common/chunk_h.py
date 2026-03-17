@@ -369,8 +369,8 @@ def chunk_fwd_h_kernel_with_same_seq(
         out_specs.append(None)
 
     in_specs = [
-        pl.BlockSpec(pl.BlockSpec((1, 1, BT, BK), k_index_map)),
-        pl.BlockSpec(pl.BlockSpec((1, 1, BT, BV), v_index_map)),
+        pl.BlockSpec((1, 1, BT, BK), k_index_map),
+        pl.BlockSpec((1, 1, BT, BV), v_index_map),
     ]
     # k_scratch = pltpu.VMEM((2, BT, BK), jnp.float32)
     # v_scratch = pltpu.VMEM((2, BT, BV), jnp.float32)
