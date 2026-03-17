@@ -338,7 +338,7 @@ def chunk_fwd_h_kernel_with_same_seq(
     if gk is not None:
         gk = jnp.transpose(gk, (0, 2, 1, 3))  # (B,H,T,K)
 
-    grid = (H, pl.cdiv(K, BK), pl.cdiv(V, BV))
+    grid = (B, H, pl.cdiv(K, BK), pl.cdiv(V, BV))
 
     def k_index_map(batch_index, head_index, k_index, _):
         return batch_index, head_index, 0, k_index
