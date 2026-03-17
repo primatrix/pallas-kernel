@@ -263,10 +263,12 @@ def _chunk_fwd_h_kernel_with_same_seq(
         @pl.when((i_t % NTS) == 0)
         def store_fn():
             h_ref[0, i_s, 0] = b_h
-        k_tile = k_ref[0, 0]
-        v_tile = v_ref[0, 0]
+        k_slice = pl.dsclie(i_t * BT, BT)
+        v_slice = pl.dsclie(i_t * BT, BT)
+        k_tile = k_ref[(0, 0, k_slice, slice(None))]
+        v_tile = v_ref[(0, 0, v_slice, slice(None))]
         if gk_ref is not None:
-            gk_tile = gk_ref[0, 0]
+            gk_tile = gk_ref[(0, 0, k_slice, slice(None))]
             g_last = gk_tile[-1, :]
             decay = jnp.exp(g_last)
             b_h = b_h * decay[:, None]  # [BK, BV] * [BK,1]
