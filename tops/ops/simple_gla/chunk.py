@@ -5,7 +5,6 @@ import jax
 import jax.experimental.pallas as pl
 import jax.lax as lax
 import jax.numpy as jnp
-import numpy as np
 from jax.experimental.pallas import tpu as pltpu
 from tops.utils import pad_to_multiple
 from tops.ops.common.chunk_h import chunk_fwd_h_kernel, chunk_fwd_h_ref
