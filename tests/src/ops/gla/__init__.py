@@ -17,6 +17,9 @@ from .chunk import (
 from .fused_chunk import fused_chunk_gla
 from .fused_recurrent import fused_recurrent_gla, fused_recurrent_gla_bwd
 
+# chunk_gla is equivalent to fused_chunk_gla in the CPU reference implementation
+chunk_gla = fused_chunk_gla
+
 __all__ = [
     "naive_recurrent_gla",
     "chunk_local_cumsum",
@@ -33,6 +36,7 @@ __all__ = [
     "pad_varlen_seqs",
     "unpad_varlen_seqs",
     "fused_chunk_gla",
+    "chunk_gla",
     "fused_recurrent_gla",
     "fused_recurrent_gla_bwd",
 ]
