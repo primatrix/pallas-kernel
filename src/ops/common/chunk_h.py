@@ -259,9 +259,9 @@ def _chunk_fwd_h_kernel_with_same_seq(
 
     @pl.when(i_t == 0)
     def init():
-        scratch_ref[...] = jnp.zeros((BK, BV), dtype=jnp.float32)
+        scratch_ref[:,:] = jnp.zeros((BK, BV), dtype=jnp.float32)
         if h0_ref is not None:
-            scratch_ref[...] = h0_ref[0, 0]
+            scratch_ref[:,:] = h0_ref[0, 0]
     
     i_s = i_t // NTS
     @pl.when((i_t % NTS) == 0)
@@ -280,7 +280,7 @@ def _chunk_fwd_h_kernel_with_same_seq(
     @pl.when(i_t == NT - 1)
     def end():
         if ht_ref is not None:
-            ht_ref[0, 0] = scratch_ref
+            ht_ref[0, 0] = scratch_ref[...]
 
 def _bytes(x: jax.Array | jax.ShapeDtypeStruct) -> int:
     return math.prod(x.shape) * x.dtype.itemsize
