@@ -135,6 +135,12 @@ def test_simple_gla_fwd_ref_vs_full_gla(cfg):
 
 
 from tops.ops.simple_gla.chunk import chunk_simple_gla_fwd_intra, chunk_simple_gla_fwd_o
+from tops.ops.simple_gla.chunk import (
+    chunk_simple_gla_fwd,
+    chunk_simple_gla_bwd,
+    chunk_simple_gla,
+)
+from tops.ops.gla.chunk import chunk_gla_bwd
 
 
 PALLAS_INTRA_CASES = [
@@ -185,6 +191,83 @@ def test_simple_gla_output_pallas_vs_ref(cfg):
     o_pl = chunk_simple_gla_fwd_o(q, v, A, h, g_gamma, scale, chunk_size=C)
 
     assert compare_tensor("output_pallas o", o_ref, o_pl, atol=1e-4, rtol=1e-4)
+
+
+ORCH_CASES = [
+    dict(B=2, T=64, H=4, K=128, V=128, seed=42),
+    dict(B=1, T=128, H=2, K=128, V=128, seed=7),
+    dict(B=2, T=64, H=4, K=128, V=128, seed=10, h0=True),
+]
+
+
+@pytest.mark.parametrize("cfg", ORCH_CASES, ids=[_case_id(c) for c in ORCH_CASES])
+def test_simple_gla_fwd_pallas_vs_ref(cfg):
+    """Full Pallas forward should match reference forward."""
+    B, T, H, K, V = cfg["B"], cfg["T"], cfg["H"], cfg["K"], cfg["V"]
+    scale = K ** -0.5
+    C = 64
+
+    torch.manual_seed(cfg["seed"])
+    q = _torch_to_jax(torch.randn(B, T, H, K)).astype(jnp.float32)
+    k = _torch_to_jax(torch.randn(B, T, H, K)).astype(jnp.float32)
+    v = _torch_to_jax(torch.randn(B, T, H, V)).astype(jnp.float32)
+    h0 = _torch_to_jax(torch.randn(B, H, K, V)) if cfg.get("h0") else None
+    g_gamma = _make_g_gamma(H, seed=cfg["seed"] + 1000)
+
+    ht_ref, o_ref = chunk_simple_gla_fwd_ref(
+        q, k, v, g_gamma, scale, initial_state=h0,
+        output_final_state=True, chunk_size=C,
+    )
+    ht_pl, o_pl = chunk_simple_gla_fwd(
+        q, k, v, g_gamma, scale, initial_state=h0,
+        output_final_state=True, chunk_size=C,
+    )
+
+    assert compare_tensor("fwd_pallas output", o_ref, o_pl, atol=1e-4, rtol=1e-4)
+    assert compare_tensor("fwd_pallas state", ht_ref, ht_pl, atol=1e-4, rtol=1e-4)
+
+
+BWD_CASES = [
+    dict(B=2, T=32, H=4, K=32, V=64, seed=42),
+    dict(B=1, T=64, H=2, K=16, V=32, seed=7),
+    dict(B=2, T=32, H=4, K=32, V=64, seed=10, h0=True),
+]
+
+
+@pytest.mark.parametrize("cfg", BWD_CASES, ids=[_case_id(c) for c in BWD_CASES])
+def test_simple_gla_bwd_vs_full_gla(cfg):
+    """Simple GLA backward should match chunk_gla_bwd with broadcast g_gamma."""
+    B, T, H, K, V = cfg["B"], cfg["T"], cfg["H"], cfg["K"], cfg["V"]
+    scale = K ** -0.5
+
+    torch.manual_seed(cfg["seed"])
+    q = _torch_to_jax(torch.randn(B, T, H, K)).astype(jnp.float32)
+    k = _torch_to_jax(torch.randn(B, T, H, K)).astype(jnp.float32)
+    v = _torch_to_jax(torch.randn(B, T, H, V)).astype(jnp.float32)
+    do = _torch_to_jax(torch.randn(B, T, H, V)).astype(jnp.float32)
+    h0 = _torch_to_jax(torch.randn(B, H, K, V)) if cfg.get("h0") else None
+    g_gamma = _make_g_gamma(H, seed=cfg["seed"] + 1000)
+
+    # Simple GLA backward
+    dq1, dk1, dv1, dg1, dh01 = chunk_simple_gla_bwd(
+        q, k, v, g_gamma, scale, initial_state=h0,
+        do=do, dht=None, chunk_size=16,
+    )
+
+    # Full GLA backward (direct)
+    dq2, dk2, dv2, dg2, dh02 = chunk_gla_bwd(
+        q, k, v,
+        g=None, g_gamma=g_gamma, g_cumsum=None,
+        scale=scale, initial_state=h0,
+        h=None, A=None, do=do, dht=None, chunk_size=16,
+    )
+
+    assert compare_tensor("bwd dq", dq2, dq1, atol=1e-5, rtol=1e-5)
+    assert compare_tensor("bwd dk", dk2, dk1, atol=1e-5, rtol=1e-5)
+    assert compare_tensor("bwd dv", dv2, dv1, atol=1e-5, rtol=1e-5)
+    assert compare_tensor("bwd dg", dg2, dg1, atol=1e-5, rtol=1e-5)
+    if h0 is not None:
+        assert compare_tensor("bwd dh0", dh02, dh01, atol=1e-5, rtol=1e-5)
 
 
 if __name__ == "__main__":

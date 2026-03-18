@@ -392,3 +392,164 @@ def chunk_simple_gla_fwd_o(
     o = o.reshape(B, H, NT * BT, V)
     o = o.transpose(0, 2, 1, 3)
     return o
+
+
+# =============================================================================
+# Forward orchestrator (Pallas)
+# =============================================================================
+
+
+def chunk_simple_gla_fwd(
+    q: jax.Array,
+    k: jax.Array,
+    v: jax.Array,
+    g_gamma: jax.Array,
+    scale: float,
+    initial_state: jax.Array | None = None,
+    output_final_state: bool = False,
+    chunk_size: int = 64,
+) -> tuple[jax.Array | None, jax.Array]:
+    """Simple GLA forward with Pallas TPU kernels.
+
+    Uses scalar-per-head gates (no [B,T,H,K] gate tensors).
+
+    Args:
+        q: [B, T, H, K]
+        k: [B, T, H, K]
+        v: [B, T, H, V]
+        g_gamma: (1, 1, H, 1) or (H,) — constant scalar gate per head
+        scale: scaling factor
+        initial_state: [B, H, K, V] or None
+        output_final_state: whether to return final state
+        chunk_size: chunk size
+
+    Returns:
+        (ht, o) — final state [B, H, K, V] or None, output [B, T, H, V]
+    """
+    B, T, H, K = q.shape
+    V = v.shape[-1]
+    C = chunk_size
+
+    # --- T padding ---
+    if T % C != 0:
+        q, k, v = (pad_to_multiple(x, C, axis=1, val=0) for x in (q, k, v))
+
+    # --- K/V padding (chunk_fwd_h_kernel requires K%128==0, V%128==0) ---
+    q, k = (pad_to_multiple(x, 128, axis=3, val=0) for x in (q, k))
+    v = pad_to_multiple(v, 128, axis=3, val=0)
+    if initial_state is not None:
+        initial_state = pad_to_multiple(initial_state, [128, 128], axis=[2, 3], val=0)
+
+    g_gamma_1d = g_gamma.reshape(-1)
+    assert g_gamma_1d.shape[0] == H
+
+    # Stage 1: Inter-chunk state propagation (reuse existing Pallas kernel)
+    h, ht = chunk_fwd_h_kernel(
+        k=k,
+        v=v,
+        g=None,
+        g_gamma=g_gamma_1d,
+        gk=None,
+        h0=initial_state,
+        output_final_state=output_final_state,
+        chunk_size=C,
+        interpret=not is_tpu_runtime(),
+    )
+    h = h.reshape(k.shape[0], -1, k.shape[2], k.shape[3], v.shape[-1])
+
+    # Stage 2: Intra-chunk attention (Simple GLA Pallas kernel)
+    A = chunk_simple_gla_fwd_intra(q, k, g_gamma, scale, chunk_size=C)
+
+    # Stage 3: Output combination (Simple GLA Pallas kernel)
+    o = chunk_simple_gla_fwd_o(q, v, A, h, g_gamma, scale, chunk_size=C)
+
+    # --- unpadding ---
+    o = o[..., :V]
+    if ht is not None:
+        ht = ht[..., :K, :V]
+    o = o[:, :T]
+
+    return ht, o
+
+
+# =============================================================================
+# Backward (delegates to existing chunk_gla_bwd)
+# =============================================================================
+
+
+def chunk_simple_gla_bwd(
+    q: jax.Array,
+    k: jax.Array,
+    v: jax.Array,
+    g_gamma: jax.Array,
+    scale: float,
+    initial_state: jax.Array | None,
+    do: jax.Array,
+    dht: jax.Array | None,
+    chunk_size: int = 64,
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array | None]:
+    """Simple GLA backward, delegating to chunk_gla_bwd.
+
+    Correct because full GLA with constant g across all K dims is
+    mathematically identical to Simple GLA.
+
+    Returns:
+        (dq, dk, dv, dg_gamma, dh0)
+    """
+    dq, dk, dv, dg, dh0 = chunk_gla_bwd(
+        q, k, v,
+        g=None, g_gamma=g_gamma, g_cumsum=None,
+        scale=scale, initial_state=initial_state,
+        h=None, A=None,
+        do=do, dht=dht,
+        chunk_size=chunk_size,
+    )
+    return dq, dk, dv, dg, dh0
+
+
+# =============================================================================
+# Public API
+# =============================================================================
+
+
+def chunk_simple_gla(
+    q: jax.Array,
+    k: jax.Array,
+    v: jax.Array,
+    g_gamma: jax.Array,
+    scale: float | None = None,
+    initial_state: jax.Array | None = None,
+    output_final_state: bool = False,
+    chunk_size: int = 64,
+) -> tuple[jax.Array, jax.Array | None]:
+    """Chunked Simple GLA — scalar-per-head gates using Pallas TPU kernels.
+
+    Args:
+        q: [B, T, H, K]
+        k: [B, T, H, K]
+        v: [B, T, H, V]
+        g_gamma: (1, 1, H, 1) or (H,) — constant scalar gate per head (log-space)
+        scale: scaling factor (default K^{-0.5})
+        initial_state: [B, H, K, V] or None
+        output_final_state: whether to return final state
+        chunk_size: chunk size
+
+    Returns:
+        (o, final_state) — output [B, T, H, V], state [B, H, K, V] or None
+    """
+    dtype = q.dtype
+    q, k, v = (x.astype(jnp.float32) for x in (q, k, v))
+    g_gamma = g_gamma.astype(jnp.float32)
+    B, T, H, K = q.shape
+
+    if scale is None:
+        scale = K ** -0.5
+
+    ht, o = chunk_simple_gla_fwd(
+        q, k, v, g_gamma, scale,
+        initial_state=initial_state,
+        output_final_state=output_final_state,
+        chunk_size=chunk_size,
+    )
+    final_state = ht if output_final_state else None
+    return o.astype(dtype), final_state
