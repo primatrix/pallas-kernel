@@ -10,7 +10,7 @@ import pytest
 import jax
 import jax.numpy as jnp
 
-from src.ops.common.chunk_h import chunk_fwd_h_kernel, chunk_fwd_h_ref
+from src.ops.common.chunk_h import chunk_fwd_h_kernel, chunk_fwd_h_ref, chunk_fwd_h_kernel_with_same_seq
 from tests.utils import compare_tensor
 
 
@@ -98,17 +98,27 @@ def _run_pallas(
     cu_seqlens=None,
 ):
     cu = _to_jax_cu_seqlens(cu_seqlens)
-    h, ht = chunk_fwd_h_kernel(
-        k,
-        v,
-        gk=gk,
-        h0=h0,
-        chunk_size=chunk_size,
-        cu_seqlens=cu,
-        output_final_state=True,
-    )
-    if cu is None:
-        h = h.reshape(k.shape[0], -1, k.shape[2], k.shape[3], v.shape[-1])
+    if cu is not None:
+        h, ht = chunk_fwd_h_kernel(
+            k,
+            v,
+            gk=gk,
+            h0=h0,
+            chunk_size=chunk_size,
+            cu_seqlens=cu,
+            output_final_state=True,
+        )
+    else:
+         h, ht = chunk_fwd_h_kernel_with_same_seq(
+            k,
+            v,
+            gk=gk,
+            h0=h0,
+            chunk_size=chunk_size,
+            output_final_state=True,
+        )
+    # if cu is None:
+        # h = h.reshape(k.shape[0], -1, k.shape[2], k.shape[3], v.shape[-1])
     return h, ht
 
 
