@@ -13,8 +13,8 @@ import torch
 import jax
 import jax.numpy as jnp
 
-from src.ops.gla import chunk_local_cumsum as pallas_chunk_local_cumsum
-from src.utils import prepare_chunk_indices
+from tops.ops.gla import chunk_local_cumsum as pallas_chunk_local_cumsum
+from tops.utils import prepare_chunk_indices
 from tests.utils import compare_tensor
 
 

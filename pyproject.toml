@@ -1,19 +1,26 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
-name = "pallas-kernel"
+name = "tops"
 version = "0.1.0"
-description = "Add your description here"
+description = "JAX/Flax Pallas kernels for Gated Linear Attention (GLA)"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.12"
+license = "Apache-2.0"
 dependencies = [
     "einops>=0.8.2",
     "flax>=0.11.2",
     "numpy>=2.4.2",
+]
+
+[project.optional-dependencies]
+dev = [
     "pre-commit>=4.5.1",
     "pytest>=9.0.2",
     "ruff>=0.15.0",
 ]
-
-[project.optional-dependencies]
 gpu = [
     "torch",
     "torchvision",

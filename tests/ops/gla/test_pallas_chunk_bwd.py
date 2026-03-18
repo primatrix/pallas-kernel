@@ -13,7 +13,7 @@ import jax
 import jax.numpy as jnp
 
 from tests.src.ops.gla.chunk import chunk_gla_bwd as cpu_chunk_gla_bwd
-from src.ops.gla.chunk import chunk_gla_bwd as jax_chunk_gla_bwd
+from tops.ops.gla.chunk import chunk_gla_bwd as jax_chunk_gla_bwd
 from tests.utils import compare_tensor
 
 

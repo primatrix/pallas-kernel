@@ -6,7 +6,7 @@ import numpy as np
 from jax.experimental import pallas as pl
 from jax.experimental.pallas import tpu as pltpu
 
-from src.utils import cdiv, align_up, pad_to_multiple
+from tops.utils import cdiv, align_up, pad_to_multiple
 
 
 # ============================================================================

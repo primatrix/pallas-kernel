@@ -14,7 +14,7 @@ import jax
 import jax.numpy as jnp
 
 from tests.src.ops.gla import chunk_gla_fwd as cpu_chunk_gla_fwd
-from src.ops.gla import chunk_gla as pallas_chunk_gla
+from tops.ops.gla import chunk_gla as pallas_chunk_gla
 from tests.utils import compare_tensor
 
 # ============================================================================
