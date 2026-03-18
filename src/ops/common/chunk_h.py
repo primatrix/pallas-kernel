@@ -238,7 +238,7 @@ def _chunk_fwd_h_kernel_with_same_seq(
     gk_ref,  # [1, 1, BT, BK]
     h_ref,  # [1, NS, 1, BK, BV]
     ht_ref,  # [1, 1, BK , BV]
-    scratch_ref,
+    scratch_ref, #[BK, BV]
     # v_scratch_ref,
     # gk_scratch_ref,
     # local_copy_sem0,
@@ -394,18 +394,18 @@ def chunk_fwd_h_kernel_with_same_seq(
         out_specs.append(None)
 
     in_specs = [
-        pl.BlockSpec((1, 1, BT, BK), k_index_map),
-        pl.BlockSpec((1, 1, BT, BV), v_index_map),
+        pl.BlockSpec((1, 1, BT, BK), k_index_map, memory_space=pltpu.VMEM),
+        pl.BlockSpec((1, 1, BT, BV), v_index_map, memory_space=pltpu.VMEM),
     ]
     scratch = pltpu.VMEM((BK, BV), jnp.float32)
     # v_scratch = pltpu.VMEM((2, BT, BV), jnp.float32)
     scratch_shapes = [scratch]
     if h0 is not None:
-        in_specs.append(pl.BlockSpec((1, 1, BK, BV), h0_index_map))
+        in_specs.append(pl.BlockSpec((1, 1, BK, BV), h0_index_map, memory_space=pltpu.VMEM))
     else:
         in_specs.append(None)
     if gk is not None:
-        in_specs.append(pl.BlockSpec((1, 1, BT, BK), gk_index_map))
+        in_specs.append(pl.BlockSpec((1, 1, BT, BK), gk_index_map, memory_space=pltpu.VMEM))
         # gk_scratch = pltpu.VMEM((2, BT, BK), jnp.float32)
         # scratch_shapes.append(gk_scratch)
     else:
