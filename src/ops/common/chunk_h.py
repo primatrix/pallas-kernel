@@ -232,13 +232,13 @@ def chunk_fwd_h_kernel(
 
 
 def _chunk_fwd_h_kernel_with_same_seq(
-    k_ref,  # [1, 1, T, BK]
-    v_ref,  # [1, 1, T, BV]
+    k_ref,  # [1, 1, BT, BK]
+    v_ref,  # [1, 1, BT, BV]
     h0_ref,  # [1, 1, BK, BV]
-    gk_ref,  # [1, 1, T, BK]
+    gk_ref,  # [1, 1, BT, BK]
     h_ref,  # [1, NS, 1, BK, BV]
     ht_ref,  # [1, 1, BK , BV]
-    # k_scratch_ref,
+    scratch_ref,
     # v_scratch_ref,
     # gk_scratch_ref,
     # local_copy_sem0,
@@ -247,42 +247,40 @@ def _chunk_fwd_h_kernel_with_same_seq(
     *,
     BT,
     BS,
+    NT,
 ):
 
-    T, BK = k_ref.shape[2], h0_ref.shape[2]
-    B = k_ref.shape[0]
+    BK = h0_ref.shape[2]
     BV = h0_ref.shape[3]
-    NT = pl.cdiv(T, BT)
+    # NT = pl.cdiv(T, BT)
     NTS = BS // BT
 
-    b_h = jnp.zeros((BK, BV), dtype=jnp.float32)
-    if h0_ref is not None:
-        b_h = h0_ref[0, 0]
+    i_t = pl.program_id(4)
+
+    @pl.when(i_t == 0)
+    def init():
+        scratch_ref[...] = jnp.zeros((BK, BV), dtype=jnp.float32)
+        if h0_ref is not None:
+            scratch_ref[...] = h0_ref[0, 0]
     
-    def body(i_t, carry):
-        b_h = carry
-        i_s = i_t // NTS
-        @pl.when((i_t % NTS) == 0)
-        def store_fn():
-            h_ref[0, i_s, 0] = b_h
+    i_s = i_t // NTS
+    @pl.when((i_t % NTS) == 0)
+    def store_fn():
+        h_ref[0, i_s, 0] = scratch_ref
 
-        t_slice = pl.dslice(i_t * BT, BT)
-        k_tile = k_ref[(0, 0, t_slice, slice(None))]
-        v_tile = v_ref[(0, 0, t_slice, slice(None))]
-        if gk_ref is not None:
-            gk_tile = gk_ref[(0, 0, t_slice, slice(None))]
-            g_last = gk_tile[-1, :]
-            decay = jnp.exp(g_last)
-            b_h = b_h * decay[:, None]  # [BK, BV] * [BK,1]
-            k_tile = (k_tile * jnp.exp(g_last[None, :] - gk_tile)).astype(gk_tile.dtype)
-
-        b_h = b_h + jax.lax.dot(k_tile.T, v_tile)   
-        return b_h   
-        
-
-    b_h = lax.fori_loop(0, NT, body, b_h)
-    if ht_ref is not None:
-        ht_ref[0, 0] = b_h
+    k_tile = k_ref[(0, 0, slice(None), slice(None))] # BT * BK
+    v_tile = v_ref[(0, 0, slice(None), slice(None))] # BT * BV
+    if gk_ref is not None:
+        gk_tile = gk_ref[(0, 0, slice(None), slice(None))] # BT * BK
+        g_last = gk_tile[-1, :]
+        decay = jnp.exp(g_last)
+        scratch_ref = scratch_ref * decay[:, None]  # [BK, BV] * [BK,1]
+        k_tile = (k_tile * jnp.exp(g_last[None, :] - gk_tile)).astype(gk_tile.dtype)
+    scratch_ref = scratch_ref + jax.lax.dot(k_tile.T, v_tile)
+    @pl.when(i_t == NT - 1)
+    def end():
+        if ht_ref is not None:
+            ht_ref[0, 0] = scratch_ref
 
 def _bytes(x: jax.Array | jax.ShapeDtypeStruct) -> int:
     return math.prod(x.shape) * x.dtype.itemsize
@@ -362,16 +360,16 @@ def chunk_fwd_h_kernel_with_same_seq(
     if gk is not None:
         gk = jnp.transpose(gk, (0, 2, 1, 3))  # (B,H,T,K)
 
-    grid = (B, H, pl.cdiv(K, BK), pl.cdiv(V, BV))
+    grid = (B, H, pl.cdiv(K, BK), pl.cdiv(V, BV), T//BT)
 
-    def k_index_map(batch_index, head_index, k_index, _):
-        return batch_index, head_index, 0, k_index
+    def k_index_map(batch_index, head_index, k_index, _, t_index,):
+        return batch_index, head_index, t_index, k_index
 
-    def gk_index_map(batch_index, head_index, k_index, _):
-        return batch_index, head_index, 0, k_index
+    def gk_index_map(batch_index, head_index,  k_index, _, t_index,):
+        return batch_index, head_index,t_index, k_index
 
-    def v_index_map(batch_index, head_index, _, v_index):
-        return batch_index, head_index, 0, v_index
+    def v_index_map(batch_index, head_index, _, v_index, t_index):
+        return batch_index, head_index, t_index, v_index
 
     def h0_index_map(batch_index, head_index, k_index, v_index):
         return batch_index, head_index, k_index, v_index
@@ -396,18 +394,18 @@ def chunk_fwd_h_kernel_with_same_seq(
         out_specs.append(None)
 
     in_specs = [
-        pl.BlockSpec((1, 1, T, BK), k_index_map),
-        pl.BlockSpec((1, 1, T, BV), v_index_map),
+        pl.BlockSpec((1, 1, BT, BK), k_index_map),
+        pl.BlockSpec((1, 1, BT, BV), v_index_map),
     ]
-    # k_scratch = pltpu.VMEM((2, BT, BK), jnp.float32)
+    scratch = pltpu.VMEM((BK, BV), jnp.float32)
     # v_scratch = pltpu.VMEM((2, BT, BV), jnp.float32)
-    # scratch_shapes = [k_scratch, v_scratch]
+    scratch_shapes = [scratch]
     if h0 is not None:
         in_specs.append(pl.BlockSpec((1, 1, BK, BV), h0_index_map))
     else:
         in_specs.append(None)
     if gk is not None:
-        in_specs.append(pl.BlockSpec((1, 1, T, BK), gk_index_map))
+        in_specs.append(pl.BlockSpec((1, 1, BT, BK), gk_index_map))
         # gk_scratch = pltpu.VMEM((2, BT, BK), jnp.float32)
         # scratch_shapes.append(gk_scratch)
     else:
@@ -418,6 +416,7 @@ def chunk_fwd_h_kernel_with_same_seq(
         _chunk_fwd_h_kernel_with_same_seq,
         BT=BT,
         BS=BS,
+        NT=T//BT,
     )
     # scratch_shapes.extend([pltpu.SemaphoreType.DMA] * 3)
     h, ht = pl.pallas_call(
@@ -427,6 +426,7 @@ def chunk_fwd_h_kernel_with_same_seq(
             grid=grid,
             in_specs=in_specs,
             out_specs=out_specs,
+            scratch_shapes=scratch_shapes
         ),
         out_shape=out_shape,
         interpret=interpret,
@@ -434,6 +434,7 @@ def chunk_fwd_h_kernel_with_same_seq(
             dimension_semantics=(
                 "parallel",
                 "parallel",
+                "arbitrary",
                 "arbitrary",
                 "arbitrary",
             ),
