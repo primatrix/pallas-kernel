@@ -371,13 +371,13 @@ def chunk_fwd_h_kernel_with_same_seq(
     def v_index_map(batch_index, head_index, _, v_index, t_index):
         return batch_index, head_index, t_index, v_index
 
-    def h0_index_map(batch_index, head_index, k_index, v_index):
+    def h0_index_map(batch_index, head_index, k_index, v_index, _):
         return batch_index, head_index, k_index, v_index
 
-    def h_index_map(batch_index, head_index, k_index, v_index):
+    def h_index_map(batch_index, head_index, k_index, v_index, _):
         return batch_index, head_index, k_index, v_index
 
-    def ht_index_map(batch_index, head_index, k_index, v_index):
+    def ht_index_map(batch_index, head_index, k_index, v_index, _):
         return batch_index, 0, head_index, k_index, v_index
 
     out_shape = [
