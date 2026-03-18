@@ -266,7 +266,7 @@ def _chunk_fwd_h_kernel_with_same_seq(
     i_s = i_t // NTS
     @pl.when((i_t % NTS) == 0)
     def store_fn():
-        h_ref[0, i_s, 0] = scratch_ref
+        h_ref[0, i_s, 0] = scratch_ref[...]
 
     k_tile = k_ref[(0, 0, slice(None), slice(None))] # BT * BK
     v_tile = v_ref[(0, 0, slice(None), slice(None))] # BT * BV
