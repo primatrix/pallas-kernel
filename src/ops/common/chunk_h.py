@@ -274,9 +274,9 @@ def _chunk_fwd_h_kernel_with_same_seq(
         gk_tile = gk_ref[(0, 0, slice(None), slice(None))] # BT * BK
         g_last = gk_tile[-1, :]
         decay = jnp.exp(g_last)
-        scratch_ref = scratch_ref * decay[:, None]  # [BK, BV] * [BK,1]
+        scratch_ref[...] = scratch_ref[...] * decay[:, None]  # [BK, BV] * [BK,1]
         k_tile = (k_tile * jnp.exp(g_last[None, :] - gk_tile)).astype(gk_tile.dtype)
-    scratch_ref = scratch_ref + jax.lax.dot(k_tile.T, v_tile)
+    scratch_ref[...] = scratch_ref[...] + jax.lax.dot(k_tile.T, v_tile)
     @pl.when(i_t == NT - 1)
     def end():
         if ht_ref is not None:
