@@ -1081,6 +1081,9 @@ def chunk_gla_fwd(
     )
     if cu_seqlens is None:
         h = h.reshape(k.shape[0], -1, k.shape[2], k.shape[3], v.shape[-1])
+    else:
+        h = h.reshape(1, -1, h.shape[1], h.shape[2], h.shape[3])
+
     A = chunk_gla_fwd_intra_gk(q, k, g_cumsum, scale, chunk_size=C)
     o = chunk_gla_fwd_o_gk(
         q, v, g_cumsum, A, h, scale, chunk_size=C,
