@@ -1013,7 +1013,13 @@ def chunk_gla_bwd_with_pl(
 
     # 1. Chunk-local cumsum
     if g_cumsum is None:
-        g_cumsum = chunk_local_cumsum_vector(g, C, cu_seqlens=cu_seqlens)
+        if g_gamma is not None and cu_seqlens is None:
+            _, T_pad, _, _ = q.shape
+            pos = jnp.arange(1, C + 1, dtype=jnp.float32)
+            pos = jnp.tile(pos, T_pad // C).reshape(1, T_pad, 1, 1)
+            g_cumsum = jnp.broadcast_to(g_gamma * pos, q.shape)
+        else:
+            g_cumsum = chunk_local_cumsum_vector(g, C, cu_seqlens=cu_seqlens)
 
     # 2. Forward replay to get h
     if h is None:
@@ -1121,7 +1127,17 @@ def chunk_gla_fwd(
         initial_state = pad_to_multiple(initial_state, [128, 128], axis=[2, 3], val=0)
 
     if g_cumsum is None:
-        g_cumsum = chunk_local_cumsum_vector(g, C, cu_seqlens=cu_seqlens)
+        if g_gamma is not None and cu_seqlens is None:
+            # Constant g_gamma: compute chunk-local cumsum analytically.
+            # For constant g, cumsum within each chunk = g_gamma * [1, 2, ..., C].
+            # This avoids chunk_local_cumsum_vector whose pallas kernel uses
+            # no_block_spec and loads the full tensor into VMEM.
+            _, T_pad, _, _ = q.shape
+            pos = jnp.arange(1, C + 1, dtype=jnp.float32)
+            pos = jnp.tile(pos, T_pad // C).reshape(1, T_pad, 1, 1)
+            g_cumsum = jnp.broadcast_to(g_gamma * pos, q.shape)
+        else:
+            g_cumsum = chunk_local_cumsum_vector(g, C, cu_seqlens=cu_seqlens)
 
     h, ht = chunk_fwd_h_kernel(
         k=k,
