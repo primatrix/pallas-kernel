@@ -134,7 +134,7 @@ def test_simple_gla_fwd_ref_vs_full_gla(cfg):
     assert compare_tensor("fwd_ref state", ht_ref, ht_simple, atol=1e-4, rtol=1e-4)
 
 
-from tops.ops.simple_gla.chunk import chunk_simple_gla_fwd_intra
+from tops.ops.simple_gla.chunk import chunk_simple_gla_fwd_intra, chunk_simple_gla_fwd_o
 
 
 PALLAS_INTRA_CASES = [
@@ -159,6 +159,32 @@ def test_simple_gla_intra_pallas_vs_ref(cfg):
     A_pl = chunk_simple_gla_fwd_intra(q, k, g_gamma, scale, chunk_size=C)
 
     assert compare_tensor("intra_pallas A", A_ref, A_pl, atol=1e-4, rtol=1e-4)
+
+
+@pytest.mark.parametrize("cfg", PALLAS_INTRA_CASES, ids=[_case_id(c) for c in PALLAS_INTRA_CASES])
+def test_simple_gla_output_pallas_vs_ref(cfg):
+    """Pallas output kernel should match reference."""
+    B, T, H, K, V = cfg["B"], cfg["T"], cfg["H"], cfg["K"], cfg["V"]
+    scale = K ** -0.5
+    C = 64
+
+    torch.manual_seed(cfg["seed"])
+    q = _torch_to_jax(torch.randn(B, T, H, K)).astype(jnp.float32)
+    k = _torch_to_jax(torch.randn(B, T, H, K)).astype(jnp.float32)
+    v = _torch_to_jax(torch.randn(B, T, H, V)).astype(jnp.float32)
+    g_gamma = _make_g_gamma(H, seed=cfg["seed"] + 1000)
+
+    # Compute h and A using reference
+    g_full = jnp.broadcast_to(g_gamma, q.shape)
+    g_cumsum = chunk_local_cumsum_ref(g_full, C)
+    h, _ = chunk_fwd_h_ref(k, v, gk=g_cumsum, h0=None,
+                           output_final_state=False, chunk_size=C)
+    A = chunk_simple_gla_fwd_intra_ref(q, k, g_gamma, scale, chunk_size=C)
+
+    o_ref = chunk_simple_gla_fwd_o_ref(q, v, g_gamma, A, h, scale, chunk_size=C)
+    o_pl = chunk_simple_gla_fwd_o(q, v, A, h, g_gamma, scale, chunk_size=C)
+
+    assert compare_tensor("output_pallas o", o_ref, o_pl, atol=1e-4, rtol=1e-4)
 
 
 if __name__ == "__main__":
