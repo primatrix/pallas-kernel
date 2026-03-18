@@ -15,6 +15,7 @@ from tops.ops.gla.chunk import (
     chunk_gla_fwd_o_gk_ref,
     chunk_local_cumsum_ref,
 )
+from tops.ops.utils import is_tpu_runtime
 
 
 # =============================================================================
@@ -165,3 +166,105 @@ def chunk_simple_gla_fwd_ref(
 
     o = o[:, :T]
     return ht, o
+
+
+# =============================================================================
+# Pallas kernel: chunk_simple_gla_fwd_intra
+# =============================================================================
+
+
+def _chunk_simple_gla_fwd_intra_kernel(
+    q_ref,
+    k_ref,
+    g_gamma,  # [H] via SMEM
+    A_ref,  # out
+    *,
+    BT,
+    scale,
+):
+    """Simple GLA intra-chunk attention Pallas kernel.
+
+    Standard matmul + Toeplitz decay mask (no per-K-dim gating).
+
+    Grid: (H, total_NT).
+    Refs (after block spec):
+      q_ref/k_ref: (1, 1, BT, K)
+      A_ref: (1, 1, BT, BT)
+    """
+    b_q = q_ref[0, 0]  # (BT, K)
+    b_k = k_ref[0, 0]  # (BT, K)
+
+    # Standard matmul (no per-element gating on q, k)
+    b_A = (
+        jnp.dot(
+            b_q,
+            b_k.T,
+            precision=jax.lax.Precision.HIGHEST,
+            preferred_element_type=jnp.float32,
+        )
+        * scale
+    )
+
+    # Toeplitz decay mask: exp(gamma * (i - j))
+    head_idx = pl.program_id(0)
+    gamma = g_gamma[head_idx]
+    pos = (jnp.arange(BT) + 1).astype(jnp.float32)
+    decay = jnp.exp(gamma * (pos[:, None] - pos[None, :]))  # (BT, BT)
+    b_A = b_A * decay
+
+    A_ref[0, 0] = b_A.astype(A_ref.dtype)
+
+
+def chunk_simple_gla_fwd_intra(
+    q: jax.Array,  # [B, T, H, K]
+    k: jax.Array,  # [B, T, H, K]
+    g_gamma: jax.Array,  # (1, 1, H, 1) or (H,)
+    scale: float,
+    chunk_size: int,
+) -> jax.Array:
+    """Launcher for Simple GLA intra-chunk attention Pallas kernel.
+
+    Returns:
+        A: [B, T, H, BT] — intra-chunk attention matrix (float32)
+    """
+    B, T, H, K = q.shape
+    BT = chunk_size
+    NT = T // BT
+    total_NT = B * NT
+
+    g_gamma_1d = g_gamma.reshape(-1)  # (H,)
+
+    interpret = not is_tpu_runtime()
+
+    # Reshape: [B, T, H, K] -> [H, B*NT, BT, K]
+    _q = q.reshape(B, NT, BT, H, K).transpose(3, 0, 1, 2, 4).reshape(H, total_NT, BT, K)
+    _k = k.reshape(B, NT, BT, H, K).transpose(3, 0, 1, 2, 4).reshape(H, total_NT, BT, K)
+
+    spec = pl.BlockSpec([1, 1, BT, K], index_map=lambda h, nt: (h, nt, 0, 0))
+    A_spec = pl.BlockSpec([1, 1, BT, BT], index_map=lambda h, nt: (h, nt, 0, 0))
+    A_shape = jax.ShapeDtypeStruct([H, total_NT, BT, BT], jnp.float32)
+
+    # SMEM only available on TPU; use plain BlockSpec in interpret mode.
+    if interpret:
+        g_gamma_spec = pl.BlockSpec(memory_space=pltpu.ANY)
+    else:
+        g_gamma_spec = pl.BlockSpec(memory_space=pltpu.SMEM)
+
+    A = pl.pallas_call(
+        functools.partial(_chunk_simple_gla_fwd_intra_kernel, BT=BT, scale=scale),
+        grid=(H, total_NT),
+        out_shape=A_shape,
+        in_specs=[spec, spec, g_gamma_spec],
+        out_specs=A_spec,
+        compiler_params=pltpu.CompilerParams(
+            vmem_limit_bytes=32 * 1024 * 1024,
+        ),
+        interpret=interpret,
+    )(_q, _k, g_gamma_1d)
+
+    # Post-reshape: [H, total_NT, BT, BT] -> [B, T, H, BT]
+    A = A.reshape(H, B, NT, BT, BT)
+    A = A.transpose(1, 0, 2, 3, 4)
+    A = A.reshape(B, H, NT * BT, BT)
+    A = A.transpose(0, 2, 1, 3)
+    return A

@@ -134,5 +134,32 @@ def test_simple_gla_fwd_ref_vs_full_gla(cfg):
     assert compare_tensor("fwd_ref state", ht_ref, ht_simple, atol=1e-4, rtol=1e-4)
 
 
+from tops.ops.simple_gla.chunk import chunk_simple_gla_fwd_intra
+
+
+PALLAS_INTRA_CASES = [
+    dict(B=2, T=64, H=4, K=128, V=128, seed=42),
+    dict(B=1, T=128, H=2, K=128, V=128, seed=7),
+]
+
+
+@pytest.mark.parametrize("cfg", PALLAS_INTRA_CASES, ids=[_case_id(c) for c in PALLAS_INTRA_CASES])
+def test_simple_gla_intra_pallas_vs_ref(cfg):
+    """Pallas intra-chunk kernel should match reference."""
+    B, T, H, K, V = cfg["B"], cfg["T"], cfg["H"], cfg["K"], cfg["V"]
+    scale = K ** -0.5
+    C = 64
+
+    torch.manual_seed(cfg["seed"])
+    q = _torch_to_jax(torch.randn(B, T, H, K)).astype(jnp.float32)
+    k = _torch_to_jax(torch.randn(B, T, H, K)).astype(jnp.float32)
+    g_gamma = _make_g_gamma(H, seed=cfg["seed"] + 1000)
+
+    A_ref = chunk_simple_gla_fwd_intra_ref(q, k, g_gamma, scale, chunk_size=C)
+    A_pl = chunk_simple_gla_fwd_intra(q, k, g_gamma, scale, chunk_size=C)
+
+    assert compare_tensor("intra_pallas A", A_ref, A_pl, atol=1e-4, rtol=1e-4)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
