@@ -964,7 +964,7 @@ def chunk_gla_bwd_with_pl(
     chunk_size: int = 64,
 ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array | None]:
     """Chunk GLA backward orchestrator using Pallas kernels."""
-    from src.ops.common.chunk_h import chunk_bwd_dh_kernel
+    from tops.ops.common.chunk_h import chunk_bwd_dh_kernel
 
     B, T, H, K = q.shape
     V = v.shape[-1]

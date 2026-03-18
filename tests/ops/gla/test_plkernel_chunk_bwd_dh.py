@@ -10,7 +10,7 @@ import pytest
 import jax
 import jax.numpy as jnp
 
-from src.ops.common.chunk_h import chunk_bwd_dh_kernel, chunk_bwd_dh_ref
+from tops.ops.common.chunk_h import chunk_bwd_dh_kernel, chunk_bwd_dh_ref
 from tests.utils import compare_tensor
 
 

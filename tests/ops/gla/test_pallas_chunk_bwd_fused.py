@@ -10,8 +10,8 @@ import pytest
 import jax
 import jax.numpy as jnp
 
-from src.ops.gla.chunk import chunk_gla_bwd_fused_pl
-from src.ops.gla.chunk import (
+from tops.ops.gla.chunk import chunk_gla_bwd_fused_pl
+from tops.ops.gla.chunk import (
     chunk_gla_fwd_intra_gk_ref,
     chunk_gla_bwd_dA_ref,
     chunk_gla_bwd_dv_ref,

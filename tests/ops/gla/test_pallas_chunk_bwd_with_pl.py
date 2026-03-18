@@ -10,7 +10,7 @@ import pytest
 import jax
 import jax.numpy as jnp
 
-from src.ops.gla.chunk import chunk_gla_bwd, chunk_gla_bwd_with_pl
+from tops.ops.gla.chunk import chunk_gla_bwd, chunk_gla_bwd_with_pl
 from tests.utils import compare_tensor
 
 CASES = [
