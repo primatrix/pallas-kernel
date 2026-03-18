@@ -19,7 +19,7 @@ from tests.src.ops.gla.chunk import (
     chunk_bwd_dh as cpu_chunk_bwd_dh,
     chunk_gla_fwd_intra_gk as cpu_chunk_gla_fwd_intra_gk,
 )
-from src.ops.gla.chunk import chunk_gla_bwd_dv_ref as jax_chunk_gla_bwd_dv
+from tops.ops.gla.chunk import chunk_gla_bwd_dv_ref as jax_chunk_gla_bwd_dv
 from tests.utils import compare_tensor
 
 

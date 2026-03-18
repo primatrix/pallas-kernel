@@ -14,7 +14,7 @@ import jax
 import jax.numpy as jnp
 
 from tests.src.ops.gla import fused_recurrent_gla as cpu_fused_recurrent
-from src.ops.gla import fused_recurrent_gla as pallas_fused_recurrent
+from tops.ops.gla import fused_recurrent_gla as pallas_fused_recurrent
 from tests.utils import compare_tensor
 
 # ============================================================================

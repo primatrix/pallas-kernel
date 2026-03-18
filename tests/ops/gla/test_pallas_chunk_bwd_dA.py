@@ -16,7 +16,7 @@ from tests.src.ops.gla.chunk import (
     chunk_gla_bwd_dA as cpu_chunk_gla_bwd_dA,
     chunk_local_cumsum as cpu_chunk_local_cumsum,
 )
-from src.ops.gla.chunk import (
+from tops.ops.gla.chunk import (
     chunk_gla_bwd_dA_ref as jax_chunk_gla_bwd_dA,
     chunk_local_cumsum_ref as jax_chunk_local_cumsum,
 )
