@@ -363,22 +363,22 @@ def chunk_fwd_h_kernel_with_same_seq(
 
     grid = (B, H, pl.cdiv(K, BK), pl.cdiv(V, BV))
 
-    def k_index_map(batch_index, head_index, k_index, _):
+    def k_index_map(it_mod, it_div, batch_index, head_index, k_index, _):
         return batch_index, head_index, 0, k_index
 
-    def gk_index_map(batch_index, head_index, k_index, _):
+    def gk_index_map(it_mod, it_div, batch_index, head_index, k_index, _):
         return batch_index, head_index, 0, k_index
 
-    def v_index_map(batch_index, head_index, _, v_index):
+    def v_index_map(it_mod, it_div, batch_index, head_index, _, v_index):
         return batch_index, head_index, 0, v_index
 
-    def h0_index_map(batch_index, head_index, k_index, v_index):
+    def h0_index_map(it_mod, it_div, batch_index, head_index, k_index, v_index):
         return batch_index, head_index, k_index, v_index
 
-    def h_index_map(batch_index, head_index, k_index, v_index):
+    def h_index_map(it_mod, it_div, batch_index, head_index, k_index, v_index):
         return batch_index, head_index, k_index, v_index
 
-    def ht_index_map(batch_index, head_index, k_index, v_index):
+    def ht_index_map(it_mod, it_div, batch_index, head_index, k_index, v_index):
         return batch_index, 0, head_index, k_index, v_index
 
     out_shape = [
