@@ -396,18 +396,18 @@ def chunk_fwd_h_kernel_with_same_seq(
         out_specs.append(None)
 
     in_specs = [
-        pl.BlockSpec((1, 1, T, BK), k_index_map, pipeline_mode=pl.Buffered(buffer_count=2, use_lookahead=True)),
-        pl.BlockSpec((1, 1, T, BV), v_index_map, pipeline_mode=pl.Buffered(buffer_count=2, use_lookahead=True)),
+        pl.BlockSpec((1, 1, T, BK), k_index_map, pipeline_mode=pl.Buffered(buffer_count=2)),
+        pl.BlockSpec((1, 1, T, BV), v_index_map, pipeline_mode=pl.Buffered(buffer_count=2)),
     ]
     # k_scratch = pltpu.VMEM((2, BT, BK), jnp.float32)
     # v_scratch = pltpu.VMEM((2, BT, BV), jnp.float32)
     # scratch_shapes = [k_scratch, v_scratch]
     if h0 is not None:
-        in_specs.append(pl.BlockSpec((1, 1, BK, BV), h0_index_map, pipeline_mode=pl.Buffered(buffer_count=2, use_lookahead=True)))
+        in_specs.append(pl.BlockSpec((1, 1, BK, BV), h0_index_map, pipeline_mode=pl.Buffered(buffer_count=2)))
     else:
         in_specs.append(None)
     if gk is not None:
-        in_specs.append(pl.BlockSpec((1, 1, T, BK), gk_index_map, pipeline_mode=pl.Buffered(buffer_count=2, use_lookahead=True)))
+        in_specs.append(pl.BlockSpec((1, 1, T, BK), gk_index_map, pipeline_mode=pl.Buffered(buffer_count=2)))
         # gk_scratch = pltpu.VMEM((2, BT, BK), jnp.float32)
         # scratch_shapes.append(gk_scratch)
     else:
