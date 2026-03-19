@@ -7,7 +7,7 @@ import jax.lax as lax
 import jax.numpy as jnp
 from jax.experimental.pallas import tpu as pltpu
 from tops.utils import pad_to_multiple
-from tops.ops.common.chunk_h import chunk_fwd_h_kernel, chunk_fwd_h_kernel as chunk_fwd_h
+from tops.ops.common.chunk_h import chunk_fwd_h_kernel, chunk_fwd_h_ref
 from tops.ops.common.chunk_o import chunk_fwd_o
 from tops.ops.gla.chunk import chunk_gla_bwd
 from tops.ops.utils import is_tpu_runtime
@@ -148,7 +148,6 @@ def chunk_simple_gla_fwd_ref(
     pos = jnp.tile(pos, T_pad // C).reshape(1, T_pad, 1, 1)
     g_cumsum = jnp.broadcast_to(g_gamma * pos, q.shape)
 
-    from tops.ops.common.chunk_h import chunk_fwd_h_ref
     h, ht = chunk_fwd_h_ref(
         k, v, gk=g_cumsum, h0=initial_state,
         output_final_state=output_final_state, chunk_size=C,
@@ -498,7 +497,7 @@ def chunk_simple_gla_fwd(
     assert (cu_seqlens is None) or (cu_seqlens % chunk_size == 0).all()
     assert (K % 128 == 0) and (V % 128 == 0)
 
-    h, ht = chunk_fwd_h(
+    h, ht = chunk_fwd_h_kernel(
         k=k,
         v=v,
         g=g,
