@@ -28,9 +28,8 @@ gpu = [
     "flash-linear-attention[gpu]>=0.4.1",
 ]
 tpu = [
-    "jax[tpu]",
+    "jax[tpu]>=0.8.1",
     "torch",
-    "torch-xla[tpu]",
 ]
 
 [[tool.uv.index]]

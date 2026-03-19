@@ -90,38 +90,30 @@ def chunk_simple_gla_bwd(
     # Build synthetic gk from g_gamma for kernels that need it
     gk = _build_gk_from_gamma(g_gamma, B, T, H, K, C)
 
-    # Workaround: Mosaic compiler hits "Null layout / non-vector operand"
-    # when h0_ref or ht_ref is None inside _chunk_fwd_h_kernel's lax.cond.
-    # Pass dummy h0 (zeros) and output_final_state=True to avoid None refs.
-    has_h0 = initial_state is not None
-    h0_for_kernel = initial_state if has_h0 else jnp.zeros((B, H, K, V), dtype=q.dtype)
-
     # 1. Recompute h via chunk_fwd_h_kernel
     h, _ = chunk_fwd_h_kernel(
         k, v,
         g=None,
-        g_gamma=None,
-        gk=gk,
-        h0=h0_for_kernel,
-        output_final_state=True,
+        g_gamma=g_gamma,
+        gk=None,
+        h0=initial_state,
+        output_final_state=False,
         chunk_size=C,
     )
     h = h.reshape(B, NT, H, K, V)
 
     # 2. Compute dh via chunk_bwd_dh_kernel with synthetic gk
-    has_dht = dht is not None
-    dht_for_kernel = dht if has_dht else jnp.zeros((B, H, K, V), dtype=q.dtype)
-
     dh, dh0 = chunk_bwd_dh_kernel(
         q, k, v,
         gk=gk,
         do=do,
-        dht=dht_for_kernel,
+        dht=dht,
         scale=scale,
         chunk_size=C,
     )
     dh = dh.reshape(B, NT, H, K, V)
-    dh0 = dh0.reshape(B, H, K, V) if (has_h0 or has_dht) else None
+    if dh0 is not None:
+        dh0 = dh0.reshape(B, H, K, V)
 
     # 3. Compute A via existing intra-chunk attention with synthetic gk
     A = chunk_gla_fwd_intra_gk_ref(q, k, gk, scale, chunk_size=C)
