@@ -232,6 +232,8 @@ def chunk_fwd_h_kernel(
 
 
 def _chunk_fwd_h_kernel_with_same_seq(
+    it_mod_ref, # [NT]
+    it_div_ref, # [NT]
     k_ref,  # [1, 1, T, BK]
     v_ref,  # [1, 1, T, BV]
     h0_ref,  # [1, 1, BK, BV]
@@ -247,13 +249,11 @@ def _chunk_fwd_h_kernel_with_same_seq(
     *,
     BT,
     BS,
+    NT,
 ):
 
-    T, BK = k_ref.shape[2], h0_ref.shape[2]
-    B = k_ref.shape[0]
+    BK = h0_ref.shape[2]
     BV = h0_ref.shape[3]
-    NT = pl.cdiv(T, BT)
-    NTS = BS // BT
 
     b_h = jnp.zeros((BK, BV), dtype=jnp.float32)
     if h0_ref is not None:
@@ -261,10 +261,9 @@ def _chunk_fwd_h_kernel_with_same_seq(
     
     def body(i_t, carry):
         b_h = carry
-        i_s = i_t // NTS
-        @pl.when((i_t % NTS) == 0)
+        @pl.when((it_mod_ref[i_t]) == 0)
         def store_fn():
-            h_ref[0, i_s, 0] = b_h
+            h_ref[0, it_div_ref[i_t], 0] = b_h
 
         t_slice = pl.dslice(i_t * BT, BT)
         k_tile = k_ref[(0, 0, t_slice, slice(None))]
@@ -396,34 +395,40 @@ def chunk_fwd_h_kernel_with_same_seq(
         out_specs.append(None)
 
     in_specs = [
-        pl.BlockSpec((1, 1, T, BK), k_index_map, pipeline_mode=pl.Buffered(buffer_count=2)),
-        pl.BlockSpec((1, 1, T, BV), v_index_map, pipeline_mode=pl.Buffered(buffer_count=2)),
+        pl.BlockSpec((1, 1, T, BK), k_index_map),
+        pl.BlockSpec((1, 1, T, BV), v_index_map),
     ]
     # k_scratch = pltpu.VMEM((2, BT, BK), jnp.float32)
     # v_scratch = pltpu.VMEM((2, BT, BV), jnp.float32)
     # scratch_shapes = [k_scratch, v_scratch]
     if h0 is not None:
-        in_specs.append(pl.BlockSpec((1, 1, BK, BV), h0_index_map, pipeline_mode=pl.Buffered(buffer_count=2)))
+        in_specs.append(pl.BlockSpec((1, 1, BK, BV), h0_index_map))
     else:
         in_specs.append(None)
     if gk is not None:
-        in_specs.append(pl.BlockSpec((1, 1, T, BK), gk_index_map, pipeline_mode=pl.Buffered(buffer_count=2)))
+        in_specs.append(pl.BlockSpec((1, 1, T, BK), gk_index_map))
         # gk_scratch = pltpu.VMEM((2, BT, BK), jnp.float32)
         # scratch_shapes.append(gk_scratch)
     else:
         # scratch_shapes.append(None)
         in_specs.append(None)
 
+    NT=T//BT
+    NTS = BS//BT
+    it_mod_array = jnp.arange(NT) % NTS
+    it_div_array = jnp.arange(NT) // NTS
+
     kernel = functools.partial(
         _chunk_fwd_h_kernel_with_same_seq,
         BT=BT,
         BS=BS,
+        NT=NT
     )
     # scratch_shapes.extend([pltpu.SemaphoreType.DMA] * 3)
     h, ht = pl.pallas_call(
         kernel,
         grid_spec=pltpu.PrefetchScalarGridSpec(
-            num_scalar_prefetch=0,
+            num_scalar_prefetch=2,
             grid=grid,
             in_specs=in_specs,
             out_specs=out_specs,
@@ -449,7 +454,7 @@ def chunk_fwd_h_kernel_with_same_seq(
             kernel_inputs_specs=(k, v, gk, h0),
             kernel_outputs_specs=out_shape,
         )
-    )(k, v, h0, gk)
+    )(it_mod_array, it_div_array, k, v, h0, gk)
     if output_final_state:
         return h, ht
     return h, None
