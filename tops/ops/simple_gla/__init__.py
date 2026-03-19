@@ -32,7 +32,7 @@ def simple_gla_naive(
     N = len(cu_seqlens_cpu) - 1 if cu_seqlens_cpu is not None else _B
 
     assert (g is None) or (g.ndim == 4)
-    assert (g_gamma is None) or (g_gamma.ndim == 1)
+    assert (g_gamma is None) or (g_gamma.ndim == 4)
 
     if cu_seqlens_cpu is not None:
         q = q.reshape(1, -1, H, K)
@@ -45,12 +45,12 @@ def simple_gla_naive(
 
     if g is None:
         if g_gamma is not None:
-            g = jnp.broadcast_to(g_gamma[None, None, :, None], (B, T, H, K))
+            g = g_gamma
         else:
             g = jnp.zeros((B, T, H, K), dtype=jnp.float32)
     else:
         if g_gamma is not None:
-            g = g + g_gamma[None, None, :, None]
+            g = g + g_gamma
 
     q = q.reshape(-1, H, K)
     k = k.reshape(-1, H, K)
