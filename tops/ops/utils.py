@@ -1,7 +1,10 @@
 import jax
+import jax.numpy as jnp
 
 _IS_TPU_RUNTIME_CACHED: bool | None = None
 
+def exp(x):
+    return jnp.exp(x.astype(jnp.float32))
 
 def is_tpu_runtime() -> bool:
     """Return True if the current JAX runtime is on TPU devices.

@@ -85,6 +85,7 @@ CASES = [
     # ── multi-batch + long ──
     dict(B=4, T=256, H=2, K=128, V=128, seed=360),
     dict(B=2, T=256, H=4, K=128, V=128, seed=361, gate="g_gamma"),
+    dict(B=2, T=4096, H=16, K=128, V=128, seed=151, gate="g_gamma", h0=True),
 ]
 
 
@@ -106,8 +107,14 @@ def _case_id(c):
 
 
 def _torch_to_jax(t: torch.Tensor) -> jnp.ndarray:
-    cpu_device = jax.devices("cpu")[0]
-    return jax.device_put(jnp.array(t.detach().cpu().float().numpy()), cpu_device)
+    """Convert torch tensor to JAX array, preserving bfloat16 dtype."""
+    # cpu_device = jax.devices("cpu")[0]
+    np_arr = t.detach().cpu().float().numpy()
+    jax_arr = jnp.array(np_arr)
+    if t.dtype == torch.bfloat16:
+        jax_arr = jax_arr.astype(jnp.bfloat16)
+    # return jax.device_put(jax_arr, cpu_device)
+    return jax_arr
 
 
 def _run_triton(q, k, v, *, g=None, g_gamma=None, h0=None, scale=None):
@@ -158,29 +165,34 @@ def _run_jax_chunk(q, k, v, *, g_gamma=None, h0=None, scale=None,
 @pytest.mark.parametrize("cfg", CASES, ids=[_case_id(c) for c in CASES])
 def test_triton_chunk_vs_jax_chunk(cfg):
     B, T, H, K, V = cfg["B"], cfg["T"], cfg["H"], cfg["K"], cfg["V"]
-    atol = cfg.get("atol", 5e-2)
+    # bf16 matmul accumulation order differs between CUDA (Triton) and JAX;
+    # errors compound across chunks, so scale atol with NT.
+    NT = T // CHUNK_SIZE
+    atol = cfg.get("atol", min(5e-2, 5e-3 * NT))
     rtol = cfg.get("rtol", 1e-2)
+    max_ulp = 2
     gate = cfg.get("gate", "none")
     scale = cfg.get("scale", None)
 
+    dtype = torch.bfloat16
     torch.manual_seed(cfg["seed"])
-    q = torch.randn(B, T, H, K)
-    k = torch.randn(B, T, H, K)
-    v = torch.randn(B, T, H, V)
+    q = torch.randn(B, T, H, K, dtype=dtype)
+    k = torch.randn(B, T, H, K, dtype=dtype)
+    v = torch.randn(B, T, H, V, dtype=dtype)
 
     g_gamma = None
     if gate == "g_gamma":
-        g_gamma = F.logsigmoid(torch.randn(H))
+        g_gamma = F.logsigmoid(torch.randn(H, dtype=dtype))
 
     N = B
-    h0 = torch.randn(N, H, K, V) if cfg.get("h0") else None
+    h0 = torch.randn(N, H, K, V, dtype=dtype) if cfg.get("h0") else None
 
     o_tri, ht_tri = _run_triton(q, k, v, g=None, g_gamma=g_gamma, h0=h0, scale=scale)
     o_jax, ht_jax = _run_jax_chunk(q, k, v, g_gamma=g_gamma, h0=h0, scale=scale)
 
-    assert compare_tensor("output", o_tri, o_jax, atol=atol, rtol=rtol)
+    assert compare_tensor("output", o_tri, o_jax, atol=atol, rtol=rtol, max_ulp=max_ulp)
     if ht_tri is not None and ht_jax is not None:
-        assert compare_tensor("final_state", ht_tri, ht_jax, atol=atol, rtol=rtol)
+        assert compare_tensor("final_state", ht_tri, ht_jax, atol=atol, rtol=rtol, max_ulp=max_ulp)
 
 
 if __name__ == "__main__":
