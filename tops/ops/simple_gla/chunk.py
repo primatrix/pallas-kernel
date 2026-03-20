@@ -1,3 +1,10 @@
+import jax
+import jax.numpy as jnp
+
+from tops.ops.common.chunk_h import chunk_fwd_h_kernel as chunk_fwd_h
+from tops.ops.common.chunk_h import chunk_fwd_h_ref
+from tops.ops.common.chunk_h import chunk_bwd_dh_kernel as chunk_bwd_dh
+from tops.ops.common.chunk_o import chunk_fwd_o, chunk_bwd_dv, chunk_bwd_dqkwg
 # pallas-kernel/tops/ops/simple_gla/chunk.py
 import functools
 
@@ -533,75 +540,87 @@ def chunk_simple_gla_bwd(
     q: jax.Array,
     k: jax.Array,
     v: jax.Array,
-    g_gamma: jax.Array,
-    scale: float,
-    initial_state: jax.Array | None,
     do: jax.Array,
-    dht: jax.Array | None,
-    chunk_size: int = 64,
-) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array | None]:
-    """Simple GLA backward, delegating to chunk_gla_bwd.
-
-    Correct because full GLA with constant g across all K dims is
-    mathematically identical to Simple GLA.
-
-    Returns:
-        (dq, dk, dv, dg_gamma, dh0)
-    """
-    dq, dk, dv, dg, dh0 = chunk_gla_bwd(
-        q, k, v,
-        g=None, g_gamma=g_gamma, g_cumsum=None,
-        scale=scale, initial_state=initial_state,
-        h=None, A=None,
-        do=do, dht=dht,
-        chunk_size=chunk_size,
-    )
-    return dq, dk, dv, dg, dh0
-
-
-# =============================================================================
-# Public API
-# =============================================================================
-
-
-def chunk_simple_gla(
-    q: jax.Array,
-    k: jax.Array,
-    v: jax.Array,
-    g_gamma: jax.Array,
+    *,
+    dht: jax.Array | None = None,
+    g: jax.Array | None = None,
+    g_gamma: jax.Array | None = None,
+    h0: jax.Array | None = None,
     scale: float | None = None,
-    initial_state: jax.Array | None = None,
-    output_final_state: bool = False,
+    cu_seqlens: jax.Array | None = None,
     chunk_size: int = 64,
-) -> tuple[jax.Array, jax.Array | None]:
-    """Chunked Simple GLA — scalar-per-head gates using Pallas TPU kernels.
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
+  B, T, H, K, V = *q.shape, v.shape[-1]
+  if scale is None:
+    scale = K ** -0.5
+  N = B if cu_seqlens is None else cu_seqlens.shape[0] - 1
 
-    Args:
-        q: [B, T, H, K]
-        k: [B, T, H, K]
-        v: [B, T, H, V]
-        g_gamma: (1, 1, H, 1) or (H,) — constant scalar gate per head (log-space)
-        scale: scaling factor (default K^{-0.5})
-        initial_state: [B, H, K, V] or None
-        output_final_state: whether to return final state
-        chunk_size: chunk size
+  assert (B, T, H, K) == k.shape
+  assert (B, T, H, V) == v.shape
+  assert (B, T, H, V) == do.shape
+  assert (dht is None) or ((N, H, K, V) == dht.shape)
+  assert (g is None) or ((B, T, H) == g.shape)
+  assert (g_gamma is None) or ((H,) == g_gamma.shape)
+  assert (h0 is None) or ((B, H, K, V) == h0.shape)
+  assert (cu_seqlens is None) or ((B + 1,) == cu_seqlens.shape)
+  assert T % chunk_size == 0
+  assert (cu_seqlens is None) or (cu_seqlens % chunk_size == 0).all()
+  assert (K % 128 == 0) and (V % 128 == 0)
 
-    Returns:
-        (o, final_state) — output [B, T, H, V], state [B, H, K, V] or None
-    """
-    dtype = q.dtype
-    q, k, v = (x.astype(jnp.float32) for x in (q, k, v))
-    g_gamma = g_gamma.astype(jnp.float32)
-    B, T, H, K = q.shape
+  h, _ = chunk_fwd_h(
+      k=k,
+      v=v,
+      g=g,
+      g_gamma=g_gamma,
+      gk=None,
+      gv=None,
+      h0=h0,
+      output_final_state=False,
+      states_in_fp32=True,
+      cu_seqlens=cu_seqlens,
+      chunk_size=chunk_size,
+  )
 
-    if scale is None:
-        scale = K ** -0.5
+  dh, dh0 = chunk_bwd_dh(
+      q=q,
+      k=k,
+      v=v,
+      g=g,
+      g_gamma=g_gamma,
+      gk=None,
+      gv=None,
+      do=do,
+      h0=h0,
+      dht=dht,
+      scale=scale,
+      states_in_fp32=True,
+      cu_seqlens=cu_seqlens,
+      chunk_size=chunk_size,
+  )
 
-    ht, o = chunk_simple_gla_pallas_fwd(
-        q, k, v, g_gamma, scale,
-        initial_state=initial_state,
-        output_final_state=output_final_state,
-        chunk_size=chunk_size,
-    )
-    final_state = ht if output_final_state else None
-    return o.astype(dtype), final_state
+  dq, dk, _, dg = chunk_bwd_dqkwg(
+      q=q,
+      k=k,
+      v=v,
+      h=h,
+      do=do,
+      dh=dh,
+      g=g,
+      g_gamma=g_gamma,
+      scale=scale,
+      cu_seqlens_cpu=cu_seqlens,
+      chunk_size=chunk_size,
+  )
+
+  dv = chunk_bwd_dv(
+      q=q,
+      k=k,
+      do=do,
+      dh=dh,
+      g=g,
+      g_gamma=g_gamma,
+      scale=scale,
+      cu_seqlens_cpu=cu_seqlens,
+      chunk_size=chunk_size,
+  )
+  return dq, dk, dv, dg, dh0
