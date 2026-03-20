@@ -136,7 +136,7 @@ def test_simple_gla_fwd_ref_vs_full_gla(cfg):
 
 from tops.ops.simple_gla.chunk import chunk_simple_gla_fwd_intra, chunk_simple_gla_fwd_o
 from tops.ops.simple_gla.chunk import (
-    chunk_simple_gla_fwd,
+    chunk_simple_gla_pallas_fwd,
     chunk_simple_gla_bwd,
     chunk_simple_gla,
 )
@@ -218,7 +218,7 @@ def test_simple_gla_fwd_pallas_vs_ref(cfg):
         q, k, v, g_gamma, scale, initial_state=h0,
         output_final_state=True, chunk_size=C,
     )
-    ht_pl, o_pl = chunk_simple_gla_fwd(
+    ht_pl, o_pl = chunk_simple_gla_pallas_fwd(
         q, k, v, g_gamma, scale, initial_state=h0,
         output_final_state=True, chunk_size=C,
     )
