@@ -60,17 +60,25 @@ def _make_jax_inputs(B, T, H, K, V, dtype, seed=42, *, h0=False):
 def test_fused_recurrent_fwd_dtypes_bf16():
     B, T, H, K, V = 2, 32, 4, 32, 64
     q, k, v, gk, _ = _make_jax_inputs(B, T, H, K, V, jnp.bfloat16)
+    # fused_recurrent_fwd returns fp32 (matching FLA's Python launcher)
     o, ht = fused_recurrent_fwd(q, k, v, gk=gk, output_final_state=True)
-    assert o.dtype == jnp.bfloat16, f"o.dtype={o.dtype}, expected bfloat16"
+    assert o.dtype == jnp.float32, f"o.dtype={o.dtype}, expected float32"
     assert ht.dtype == jnp.float32, f"ht.dtype={ht.dtype}, expected float32"
+    # fused_recurrent_gla casts to q.dtype (matching FusedRecurrentFunction.forward)
+    o2, _ = fused_recurrent_gla(q, k, v, gk=gk, output_final_state=True)
+    assert o2.dtype == jnp.bfloat16, f"o2.dtype={o2.dtype}, expected bfloat16"
 
 
 def test_fused_recurrent_fwd_dtypes_fp16():
     B, T, H, K, V = 2, 32, 4, 32, 64
     q, k, v, gk, _ = _make_jax_inputs(B, T, H, K, V, jnp.float16)
+    # fused_recurrent_fwd returns fp32 (matching FLA's Python launcher)
     o, ht = fused_recurrent_fwd(q, k, v, gk=gk, output_final_state=True)
-    assert o.dtype == jnp.float16, f"o.dtype={o.dtype}, expected float16"
+    assert o.dtype == jnp.float32, f"o.dtype={o.dtype}, expected float32"
     assert ht.dtype == jnp.float32, f"ht.dtype={ht.dtype}, expected float32"
+    # fused_recurrent_gla casts to q.dtype (matching FusedRecurrentFunction.forward)
+    o2, _ = fused_recurrent_gla(q, k, v, gk=gk, output_final_state=True)
+    assert o2.dtype == jnp.float16, f"o2.dtype={o2.dtype}, expected float16"
 
 
 def test_fused_recurrent_fwd_dtypes_fp32():
