@@ -260,6 +260,7 @@ def chunk_simple_gla_fwd_intra(
         out_specs=A_spec,
         compiler_params=pltpu.CompilerParams(
             vmem_limit_bytes=32 * 1024 * 1024,
+            disable_bounds_checks=True,
         ),
         interpret=interpret,
     )(_q, _k, g_gamma_1d)
@@ -384,6 +385,7 @@ def chunk_simple_gla_fwd_o(
         out_specs=o_spec,
         compiler_params=pltpu.CompilerParams(
             vmem_limit_bytes=32 * 1024 * 1024,
+            disable_bounds_checks=True,
         ),
         interpret=interpret,
     )(_q, _v, _h, _A, g_gamma_1d)

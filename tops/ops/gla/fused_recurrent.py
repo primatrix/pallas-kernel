@@ -355,6 +355,10 @@ def _fused_recurrent_gla_fwd(
             seqlens_blockspec,
         ],
         out_specs=[o_blockspec, ht_blockspec],
+        compiler_params=pltpu.CompilerParams(
+            disable_bounds_checks=True,
+        ),
+
     )(q_trans, k_trans, v_trans, gk_trans, gv_trans, h0_trans, cu_seqlens)
     o, ht = results
     o = o.transpose(0, 2, 3, 1, 4)  # [NK, H, N, T, V] -> [NK, N, T, H, V]
@@ -751,6 +755,9 @@ def _fused_recurrent_gla_bwd(
             do_bs, dht_bs, seqlens_bs,
         ],
         out_specs=[dq_bs, dk_bs, dv_bs, dh0_bs, ht_bs],
+        compiler_params=pltpu.CompilerParams(
+            disable_bounds_checks=True,
+        ),
     )(
         q_trans, k_trans, v_trans, gk_trans, gv_trans, h0_trans,
         do_trans, dht_trans, cu_seqlens,
