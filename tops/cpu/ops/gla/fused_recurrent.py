@@ -8,8 +8,10 @@ Dtype contract (matching FLA Triton for bf16/fp16/fp32; all fp64 for fp64):
   Forward (fused_recurrent_fwd_kernel):
     All inputs loaded as fp32:  tl.load(...).to(tl.float32)
     Hidden state b_h:           fp32 accumulator
-    Output o:                   allocated fp32, then o.to(q.dtype) in autograd wrapper
+    Output o:                   fp32 (fused_recurrent_fwd returns fp32)
     Final state ht:             fp32
+    Public API (fused_recurrent_gla) casts o to q.dtype,
+    matching FusedRecurrentFunction.forward.
 
   Backward (fused_recurrent_bwd_kernel):
     Pass 1 (forward replay → dq):
@@ -65,9 +67,14 @@ def fused_recurrent_fwd(
     Dtype behavior (matching FLA Triton fused_recurrent_fwd_kernel):
       - All inputs loaded as fp32 inside kernel
       - Hidden state h: fp32 accumulator
-      - Output o: fp32, then cast to q.dtype in FusedRecurrentFunction.forward
+      - Output o: fp32 (matching FLA's Python launcher; caller casts to q.dtype)
       - Final state ht: fp32
       - fp64 mode: all fp64, no casts
+
+    Note: Returns fp32 output (before cast), matching FLA's fused_recurrent_fwd.
+    The public API fused_recurrent_gla casts o to q.dtype, mirroring
+    FusedRecurrentFunction.forward. Users who need backward with gv should
+    save the fp32 o from this function for fused_recurrent_bwd.
 
     Args:
         q:  [B, T, H, K] — Queries
@@ -82,11 +89,10 @@ def fused_recurrent_fwd(
         cu_seqlens: [N+1] — Cumulative sequence lengths (requires B=1)
 
     Returns:
-        o:  [B, T, H, V] in q.dtype
+        o:  [B, T, H, V] in fp32/fp64 (accumulator dtype)
         ht: [N, H, K, V] in fp32/fp64, or None
     """
-    orig_dtype = q.dtype
-    acc_dt = _acc_dtype(orig_dtype)
+    acc_dt = _acc_dtype(q.dtype)
 
     B, T, H, K = q.shape
     V = v.shape[-1]
@@ -144,8 +150,9 @@ def fused_recurrent_fwd(
 
     ht = jnp.stack(ht_list, axis=0) if output_final_state else None
 
-    # FLA FusedRecurrentFunction.forward: return o.to(q.dtype), ht
-    return o.astype(orig_dtype), ht
+    # FLA fused_recurrent_fwd (Python launcher) returns fp32 o and ht.
+    # The cast to q.dtype happens in FusedRecurrentFunction.forward / fused_recurrent_gla.
+    return o, ht
 
 
 # =============================================================================
@@ -186,7 +193,9 @@ def fused_recurrent_bwd(
         v:  [B, T, H, V]
         gk: [B, T, H, K] — Per-key gate (optional)
         gv: [B, T, H, V] — Per-value gate (optional)
-        o:  [B, T, H, V] — Forward output (required when gv is used)
+        o:  [B, T, H, V] — Forward output in fp32 (required when gv is used).
+            Use the fp32 output from fused_recurrent_fwd directly, not the
+            q.dtype output from fused_recurrent_gla, to match FLA precision.
         do: [B, T, H, V] — Gradient of output
         dht: [N, H, K, V] — Gradient of final state (optional)
         scale: Scaling factor, default K^{-0.5}
@@ -312,8 +321,10 @@ def fused_recurrent_bwd(
         if initial_state is not None:
             dh0_list.append(dh)
 
-    # Triton: dh0 = torch.empty_like(h0)
+    # Triton: dh0 = torch.empty_like(h0), store b_dh.to(p_dh0.dtype.element_ty)
     dh0 = jnp.stack(dh0_list, axis=0) if initial_state is not None else None
+    if dh0 is not None:
+        dh0 = dh0.astype(initial_state.dtype)
 
     # FLA FusedRecurrentFunction.backward casts:
     #   dq.to(q.dtype), dk.to(k.dtype), dv.to(v.dtype)
@@ -350,7 +361,10 @@ def fused_recurrent_gla(
 ) -> tuple[jnp.ndarray, jnp.ndarray | None]:
     """Fused recurrent GLA — public API matching FLA signature.
 
-    Wraps fused_recurrent_fwd. For backward, call fused_recurrent_bwd directly.
+    Wraps fused_recurrent_fwd, casting output to q.dtype (mirrors
+    FusedRecurrentFunction.forward in FLA). For backward with gv,
+    call fused_recurrent_fwd directly to obtain fp32 o, then pass
+    it to fused_recurrent_bwd.
 
     Args:
         q:  [B, T, H, K] — Queries
@@ -387,8 +401,10 @@ def fused_recurrent_gla(
         f"cu_seqlens requires B=1, got B={B}"
     )
 
-    return fused_recurrent_fwd(
+    o, ht = fused_recurrent_fwd(
         q=q, k=k, v=v, gk=gk, gv=gv, scale=scale,
         initial_state=initial_state, output_final_state=output_final_state,
         reverse=reverse, cu_seqlens=cu_seqlens,
     )
+    # FLA FusedRecurrentFunction.forward: return o.to(q.dtype), ht
+    return o.astype(q.dtype), ht
