@@ -183,6 +183,9 @@ def chunk_local_cumsum_vector(
         ),
         out_shape=jax.ShapeDtypeStruct(g_flat.shape, out_dtype),
         interpret=interpret,
+        compiler_params=pltpu.CompilerParams(
+            disable_bounds_checks=True,
+        ),
     )(cu_seqlens, chunk_indices, g_flat)
 
     # Remove the padding added earlier.
@@ -418,6 +421,7 @@ def chunk_gla_fwd_intra_gk(
         out_specs=A_spec,
         compiler_params=pltpu.CompilerParams(
             vmem_limit_bytes=32 * 1024 * 1024,
+            disable_bounds_checks=True,
         ),
     )(_q, _k, _g)
 
@@ -1365,6 +1369,7 @@ def chunk_gla_fwd_o_gk_pl(
         out_specs=o_spec,
         compiler_params=pltpu.CompilerParams(
             vmem_limit_bytes=32 * 1024 * 1024,
+            disable_bounds_checks=True,
         ),
     )(_q, _v, _g, _h, _A)
 
@@ -1525,6 +1530,7 @@ def chunk_gla_bwd_fused_pl(
         out_specs=[spec_K, spec_K, spec_V, spec_K],
         compiler_params=pltpu.CompilerParams(
             vmem_limit_bytes=32 * 1024 * 1024, # 32 MB limit to be safe
+            disable_bounds_checks=True,
         ),
     )(_q, _k, _v, _g, _h, _A, _do, _dh)
 
