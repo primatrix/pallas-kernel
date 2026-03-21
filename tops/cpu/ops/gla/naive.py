@@ -17,12 +17,15 @@ from __future__ import annotations
 
 import jax.numpy as jnp
 
+from tops.cpu.ops import cpu_reference
+
 
 def _acc_dtype(input_dtype) -> jnp.dtype:
     """Accumulator dtype: fp64 for fp64 inputs, fp32 otherwise."""
     return jnp.float64 if input_dtype == jnp.float64 else jnp.float32
 
 
+@cpu_reference
 def naive_recurrent_gla(
     q: jnp.ndarray,
     k: jnp.ndarray,

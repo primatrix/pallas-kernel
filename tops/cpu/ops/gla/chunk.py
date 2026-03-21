@@ -33,6 +33,8 @@ import jax
 import jax.numpy as jnp
 from jax import lax
 
+from tops.cpu.ops import cpu_reference
+
 
 def _cdiv(x: int, y: int) -> int:
     return (x + y - 1) // y
@@ -751,6 +753,7 @@ def chunk_gla_bwd(
 # =============================================================================
 
 
+@cpu_reference
 def chunk_gla(
     q: jnp.ndarray,
     k: jnp.ndarray,
