@@ -33,6 +33,8 @@ from __future__ import annotations
 import jax.numpy as jnp
 import numpy as np
 
+from tops.cpu.ops import cpu_reference
+
 
 def _acc_dtype(input_dtype) -> jnp.dtype:
     """Accumulator dtype: fp64 for fp64 inputs, fp32 otherwise."""
@@ -347,6 +349,7 @@ def fused_recurrent_bwd(
 # =============================================================================
 
 
+@cpu_reference
 def fused_recurrent_gla(
     q: jnp.ndarray,
     k: jnp.ndarray,

@@ -64,7 +64,7 @@ _FWD_SHAPES = [
 
 _DTYPE_TOLS = {
     "float64":  dict(atol=5e-5, rtol=5e-5),
-    "float32":  dict(atol=5e-3, rtol=5e-3),
+    "float32":  dict(atol=5e-5, rtol=5e-5),
     "float16":  dict(atol=5e-3, rtol=5e-3),
     "bfloat16": dict(atol=5e-2, rtol=5e-2),
 }
