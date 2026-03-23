@@ -571,6 +571,7 @@ def chunk_simple_gla_bwd(
     assert_shape(v, (B, T, H, V))
     assert_shape(do, (B, T, H, V))
     assert K % 128 == 0 and V % 128 == 0
+    assert T % C == 0
 
     NT = T // C
 
