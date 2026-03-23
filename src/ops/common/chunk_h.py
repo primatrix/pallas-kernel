@@ -232,81 +232,193 @@ def chunk_fwd_h_kernel(
 
 
 def _chunk_fwd_h_kernel_with_same_seq(
-    it_mod_ref, # [NT]
-    it_div_ref, # [NT]
-    k_ref,  # [1, 1, T, BK]
-    v_ref,  # [1, 1, T, BV]
-    h0_ref,  # [1, 1, BK, BV]
-    gk_ref,  # [1, 1, T, BK]
-    h_ref,  # [1, NS, 1, BK, BV]
-    ht_ref,  # [1, 1, BK , BV]
-    # k_scratch_ref,
-    # v_scratch_ref,
-    # gk_scratch_ref,
-    # local_copy_sem0,
-    # local_copy_sem1,
-    # local_copy_sem2,
+    k_ref,  # [B, H, T, K]
+    v_ref,  # [B, H, T, V]
+    h0_ref,  # [B, H, K, V]
+    gk_ref,  # [B, H, T, K]
+    h_ref,  # [B, NS, H, K, V]
+    ht_ref,  # [B, H, K , V]
+    k_scratch_ref, # [2, BT, BK]
+    v_scratch_ref, # [2, BT, BV]
+    gk_scratch_ref, # [2, BT, BK]
+    h0_scratch_ref, # [2, BK, BV]
+    o_scratch_ref, # [BK, BV]
+    sems, #
     *,
     BT,
     BS,
-    NT,
 ):
+    B, H, T, K, V = k_ref.shape[0], k_ref.shape[1], k_ref.shape[2], k_ref.shape[3], v_ref.shape[3]
+    BK, BV = k_scratch_ref.shape[2], v_scratch_ref.shape[2]
+    NK = K // BK
+    NV = V // BV
+    b_part_i = pl.program_id(0)
 
-    BK = h0_ref.shape[2]
-    BV = h0_ref.shape[3]
+    NT = pl.cdiv(T, BT)
+    NTS = BS // BT
 
-    b_h = jnp.zeros((BK, BV), dtype=jnp.float32)
-    if h0_ref is not None:
-        b_h = h0_ref[0, 0]
+    local_B = B // 2
+
+    def _async_copy(src, dst, sem, wait):
+        cp = pltpu.make_async_copy(src, dst, sem)
+        if wait:
+            cp.wait()
+        else:
+            cp.start()
     
-    def body(i_t, carry):
-        b_h = carry
-        @pl.when((it_mod_ref[i_t]) == 0)
-        def store_fn():
-            h_ref[0, it_div_ref[i_t], 0] = b_h
+    def _sync_copy(src, dst, sem):
+        cp = pltpu.make_async_copy(src, dst, sem)
+        cp.start()
+        cp.wait()
 
-        t_slice = pl.dslice(i_t * BT, BT)
-        k_tile = k_ref[(0, 0, t_slice, slice(None))]
-        v_tile = v_ref[(0, 0, t_slice, slice(None))]
-        if gk_ref is not None:
-            gk_tile = gk_ref[(0, 0, t_slice, slice(None))]
-            g_last = gk_tile[-1, :]
-            decay = jnp.exp(g_last)
-            b_h = b_h * decay[:, None]  # [BK, BV] * [BK,1]
-            k_tile = (k_tile * jnp.exp(g_last[None, :] - gk_tile)).astype(gk_tile.dtype)
+    h_buff = 0
+    @pl.loop(0, local_B, unroll=True)
+    def body(b_i):
+        @pl.loop(0, H, unroll=True)
+        def inner_body(h_i):
+            @pl.loop(0, NK, unroll=True)
+            def k_body(k_i):
+                @pl.loop(0, NV, unroll=True)
+                def v_body(v_i):
+                    nonlocal h_buff
+                    h_buff = jnp.mod(h_buff, 2)
+                    next_h_buff = jnp.mod(h_buff + 1, 2)
 
-        b_h = b_h + jax.lax.dot(k_tile.T, v_tile)   
-        return b_h   
+                    k_slice = pl.ds(k_i * BK, BK)
+                    v_slice = pl.ds(v_i * BV, BV)
+                    b_slice = pl.ds(b_part_i * local_B + b_i, 1)
+
+
+                    t_dslice = pl.dslice(0, BT)
+                    _async_copy(
+                        k_ref.at[(b_slice, h_i,  t_dslice, k_slice)],
+                        k_scratch_ref.at[0],
+                        sems.at[0, 0],
+                        False,
+                    )
+                    _async_copy(
+                        v_ref.at[(b_slice, h_i, t_dslice, v_slice)],
+                        v_scratch_ref.at[0],
+                        sems.at[1, 0],
+                        False
+                    )
+
+                    if gk_ref is not None:
+                        _async_copy(
+                            gk_ref.at[(b_slice, h_i,  t_dslice, k_slice)],
+                            gk_scratch_ref.at[0],
+                            sems.at[2, 0],
+                            False,
+                        )
+                    if h0_ref is not None:
+                        _async_copy(h0_ref.at[(b_slice, h_i,  k_i, v_i)],
+                                h0_scratch_ref.at[h_buff],
+                                sems.at[3, h_buff], False)
+                    
+
+                    @pl.loop(0, NT, unroll=True)
+                    def t_body(i_t):
+                        buf = jnp.mod(i_t , 2)
+                        next_buf = jnp.mod(i_t + 1,  2)
+
+                        def wait():
+                            t_curr = i_t * BT
+                            pl_dslice = pl.dslice(t_curr, BT)
+                            k_dslice = pl.dslice(k_i * BK, BK)
+                            v_dslice = pl.dslice(v_i * BV, BV)
+
+                            _async_copy(
+                                k_ref.at[(b_slice, h_i,  pl_dslice, k_dslice)],
+                                k_scratch_ref.at[buf],
+                                sems.at[0, buf],
+                                True,
+                            )
+                            _async_copy(
+                                v_ref.at[(b_slice, h_i, pl_dslice, v_dslice)],
+                                v_scratch_ref.at[buf],
+                                sems.at[1, buf],
+                                True
+                            )
+
+                            if gk_ref is not None:
+                                _async_copy(
+                                    gk_ref.at[(b_slice, h_i,  pl_dslice, k_dslice)],
+                                    gk_scratch_ref.at[buf],
+                                    sems.at[2, buf],
+                                    True,
+                                )
+
+                            if h0_ref is not None:
+                                _async_copy(h0_ref.at[(b_slice, h_i,  k_i, v_i)],
+                                        h0_scratch_ref.at[h_buff],
+                                        sems.at[3, h_buff], True)
+                                    
+                        wait()
+                        @pl.when(i_t == 0)
+                        def init():
+                            if h0_ref is not None:
+                                o_scratch_ref[...] = h0_scratch_ref[h_buff]
+                            else:
+                                o_scratch_ref[...] = jnp.zeros((BK, BV), dtype=jnp.float32)
+                        
+                        i_s = i_t // NTS
+                        @pl.when((i_t % NTS) == 0)
+                        def store_fn():
+                            _sync_copy(o_scratch_ref.at[...], h_ref.at[b_slice, i_s, h_i, k_i, v_i], sems[4, 0])
+
+                        
+                        @pl.when(i_t + 1 < NT)
+                        def do_prefetch():
+                            t0 = (i_t + 1) * BT
+                            t_dslice = pl.dslice(t0, BT)
+                            _async_copy(
+                                k_ref.at[(b_slice, h_i,  t_dslice, k_slice)],
+                                k_scratch_ref.at[next_buf],
+                                sems.at[0, next_buf],
+                                False,
+                            )
+                            _async_copy(
+                                v_ref.at[(b_slice, h_i, t_dslice, v_slice)],
+                                v_scratch_ref.at[next_buf],
+                                sems.at[1, next_buf],
+                                False
+                            )
+
+                            if gk_ref is not None:
+                                _async_copy(
+                                    gk_ref.at[(b_slice, h_i,  t_dslice, k_slice)],
+                                    gk_scratch_ref.at[next_buf],
+                                    sems.at[2, next_buf],
+                                    False,
+                                )
+
+                        @pl.when(i_t + 1 == NT)
+                        def prefetch_h0():
+                            if h0_ref is not None:
+                                _async_copy(h0_ref.at[(b_slice, h_i,  k_slice, v_slice)],
+                                        h0_scratch_ref.at[next_h_buff],
+                                        sems.at[3, next_h_buff], False)
+                        
+                            
+                        k_tile = k_scratch_ref[buf]
+                        v_tile = v_scratch_ref[buf]
+                        if gk_ref is not None:
+                            gk_tile = gk_scratch_ref[buf]
+                            g_last = gk_tile[-1, :]
+                            decay = jnp.exp(g_last)
+                            o_scratch_ref[...] = o_scratch_ref[...] * decay[:, None]  # [BK, BV] * [BK,1]
+                            k_tile = (k_tile * jnp.exp(g_last[None, :] - gk_tile)).astype(gk_tile.dtype)
+
+                        o_scratch_ref[...] = o_scratch_ref[...] + jax.lax.dot(k_tile.T, v_tile)      
         
+                    
+                        @pl.when(i_t + 1 == NT)
+                        def output():
+                            _sync_copy(o_scratch_ref.at[...], ht_ref.at[b_slice, h_i, k_slice, v_slice], sems[4, 0])
 
-    b_h = lax.fori_loop(0, NT, body, b_h)
-    if ht_ref is not None:
-        ht_ref[0, 0] = b_h
+                    h_buff = h_buff + 1
+    
 
-def _bytes(x: jax.Array | jax.ShapeDtypeStruct) -> int:
-    return math.prod(x.shape) * x.dtype.itemsize
-
-
-def _fwd_cost_estimate(
-    k: jax.Array,
-    v: jax.Array,
-    gk: jax.Array | None,
-    h0: jax.Array | None,
-    output_final_state: bool,
-    chunk_size: int,
-    kernel_inputs_specs,
-    kernel_outputs_specs,
-) -> pl.CostEstimate | None:
-    body_cost = pl.estimate_cost(
-        chunk_fwd_h_ref, k, v, gk, h0
-    )
-    input_bytes = sum(_bytes(x) for x in jax.tree.leaves(kernel_inputs_specs))
-    output_bytes = sum(_bytes(x) for x in jax.tree.leaves(kernel_outputs_specs))
-    return pl.CostEstimate(
-        flops=body_cost.flops,
-        transcendentals=body_cost.transcendentals,
-        bytes_accessed=input_bytes + output_bytes,
-    )
 
 @functools.partial(
     jax.jit,
@@ -361,103 +473,101 @@ def chunk_fwd_h_kernel_with_same_seq(
     if gk is not None:
         gk = jnp.transpose(gk, (0, 2, 1, 3))  # (B,H,T,K)
 
-    grid = (B, H, pl.cdiv(K, BK), pl.cdiv(V, BV))
+    # grid = (B , H, pl.cdiv(K, BK), pl.cdiv(V, BV))
 
-    def k_index_map(batch_index, head_index, k_index, _, it_mod, it_div,):
-        return batch_index, head_index, 0, k_index
+    # def k_index_map(batch_index, head_index, k_index, _):
+    #     return batch_index, head_index, 0, k_index
 
-    def gk_index_map(batch_index, head_index, k_index, _, it_mod, it_div,):
-        return batch_index, head_index, 0, k_index
+    # def gk_index_map(batch_index, head_index, k_index, _):
+    #     return batch_index, head_index, 0, k_index
 
-    def v_index_map(batch_index, head_index, _, v_index, it_mod, it_div):
-        return batch_index, head_index, 0, v_index
+    # def v_index_map(batch_index, head_index, _, v_index):
+    #     return batch_index, head_index, 0, v_index
 
-    def h0_index_map(batch_index, head_index, k_index, v_index, it_mod, it_div,):
-        return batch_index, head_index, k_index, v_index
+    # def h0_index_map(batch_index, head_index, k_index, v_index):
+    #     return batch_index, head_index, k_index, v_index
 
-    def h_index_map(batch_index, head_index, k_index, v_index, it_mod, it_div,):
-        return batch_index, head_index, k_index, v_index
+    # def h_index_map(batch_index, head_index, k_index, v_index):
+    #     return batch_index, head_index, k_index, v_index
 
-    def ht_index_map(batch_index, head_index, k_index, v_index, it_mod, it_div):
-        return batch_index, 0, head_index, k_index, v_index
+    # def ht_index_map(batch_index, head_index, k_index, v_index):
+    #     return batch_index, 0, head_index, k_index, v_index
 
     out_shape = [
         jax.ShapeDtypeStruct(
             shape=(N, NS, H, K, V), dtype=k.dtype if not states_in_fp32 else jnp.float32
         )
     ]
-    out_specs = [pl.BlockSpec((1, NS, 1, BK, BV), ht_index_map)]
+    out_specs = [pl.BlockSpec(memory_space=pltpu.HBM)]
     if output_final_state:
         out_shape.append(jax.ShapeDtypeStruct(shape=(N, H, K, V), dtype=k.dtype))
-        out_specs.append(pl.BlockSpec((1, 1, BK, BV), h_index_map))
+        out_specs.append(pl.BlockSpec(memory_space=pltpu.HBM))
     else:
         out_shape.append(None)
         out_specs.append(None)
 
     in_specs = [
-        pl.BlockSpec((1, 1, T, BK), k_index_map),
-        pl.BlockSpec((1, 1, T, BV), v_index_map),
+        pl.BlockSpec(memory_space=pltpu.HBM),
+        pl.BlockSpec(memory_space=pltpu.HBM),
     ]
-    # k_scratch = pltpu.VMEM((2, BT, BK), jnp.float32)
-    # v_scratch = pltpu.VMEM((2, BT, BV), jnp.float32)
-    # scratch_shapes = [k_scratch, v_scratch]
+    k_scratch = pltpu.VMEM((2, BT, BK), jnp.float32)
+    v_scratch = pltpu.VMEM((2, BT, BV), jnp.float32)
+    o_scratch = pltpu.VMEM((BT, BV), jnp.float32)
+    scratch_shapes = [k_scratch, v_scratch]
     if h0 is not None:
-        in_specs.append(pl.BlockSpec((1, 1, BK, BV), h0_index_map))
+        in_specs.append(pl.BlockSpec(memory_space=pltpu.HBM))
+        h_scratch = pltpu.VMEM((2, BK, BV), jnp.float32)
+        scratch_shapes.append(h_scratch)
     else:
+        scratch_shapes.append(None)
         in_specs.append(None)
     if gk is not None:
-        in_specs.append(pl.BlockSpec((1, 1, T, BK), gk_index_map))
-        # gk_scratch = pltpu.VMEM((2, BT, BK), jnp.float32)
-        # scratch_shapes.append(gk_scratch)
+        in_specs.append(pl.BlockSpec(memory_space=pltpu.HBM))
+        gk_scratch = pltpu.VMEM((2, BT, BK), jnp.float32)
+        scratch_shapes.append(gk_scratch)
     else:
-        # scratch_shapes.append(None)
+        scratch_shapes.append(None)
         in_specs.append(None)
 
-    NT=T//BT
-    NTS = BS//BT
-    it_mod_array = jnp.arange(NT) % NTS
-    it_div_array = jnp.arange(NT) // NTS
+    scratch_shapes.append(o_scratch)
 
     kernel = functools.partial(
         _chunk_fwd_h_kernel_with_same_seq,
         BT=BT,
         BS=BS,
-        NT=NT
     )
-    # scratch_shapes.extend([pltpu.SemaphoreType.DMA] * 3)
+    scratch_shapes.extend(pltpu.SemaphoreType.DMA((5, 2))) ## k, v, gk, h0, h
     h, ht = pl.pallas_call(
         kernel,
         grid_spec=pltpu.PrefetchScalarGridSpec(
-            num_scalar_prefetch=2,
-            grid=grid,
+            num_scalar_prefetch=0,
+            grid=(2,), # magacore
             in_specs=in_specs,
             out_specs=out_specs,
+            scratch_shapes=(
+              # DMA semaphores are allocated in scratch memory.
+              # We allocated one semaphore for a local HBM-VMEM copy,
+              # and one for the remote send semaphore.
+              scratch_shapes
+              # We additionally allocate one receive semaphore per device.
+              # This is to avoid situations where we have multiple
+              # DMAs in flight, as we do not want to share a receive
+              # semaphore between the DMAs.
+            )
         ),
         out_shape=out_shape,
         interpret=interpret,
         compiler_params=pltpu.CompilerParams(
             dimension_semantics=(
                 "parallel",
-                "parallel",
-                "arbitrary",
-                "arbitrary",
             ),
             vmem_limit_bytes=128 * 1024 * 1024,
         ),
-        cost_estimate=_fwd_cost_estimate(
-            jnp.transpose(k, (0, 2, 1, 3)),
-            jnp.transpose(v, (0, 2, 1, 3)),
-            jnp.transpose(gk, (0, 2, 1, 3)) if gk is not None else None,
-            h0,
-            True,
-            chunk_size=64,
-            kernel_inputs_specs=(k, v, gk, h0),
-            kernel_outputs_specs=out_shape,
-        )
-    )(it_mod_array, it_div_array, k, v, h0, gk)
+    )(k, v, h0, gk)
     if output_final_state:
         return h, ht
     return h, None
+
 
 
 def chunk_fwd_h_ref(
