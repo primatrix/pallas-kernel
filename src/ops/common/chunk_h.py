@@ -385,6 +385,7 @@ def _chunk_fwd_h_kernel_with_same_seq(
                     o_scratch_ref[...] = jnp.zeros((BK, BV), dtype=jnp.float32)
 
 
+        wait()
 
         i_s = t_i // NTS
         @pl.when((t_i % NTS) == 0)
@@ -439,7 +440,7 @@ def _chunk_fwd_h_kernel_with_same_seq(
                     False,
                 )
             
-            @pl.when(t_i == NT)
+            @pl.when(t_i == NT - 1)
             def _():
                 nonlocal h_buf
                 if h0_ref is not None:
@@ -448,7 +449,7 @@ def _chunk_fwd_h_kernel_with_same_seq(
                             sems.at[3, next_h_buf])
                     h_buf = h_buf + 1
 
-        wait()
+
         
         k_tile = k_scratch_ref[buf]
         v_tile = v_scratch_ref[buf]
