@@ -286,7 +286,7 @@ def _chunk_fwd_h_kernel_with_same_seq(
 
                     k_slice = pl.ds(k_i * BK, BK)
                     v_slice = pl.ds(v_i * BV, BV)
-                    b_slice = pl.ds(b_part_i * local_B + b_i, 1)
+                    b_slice = b_part_i * local_B + b_i
 
 
                     t_dslice = pl.dslice(0, BT)
