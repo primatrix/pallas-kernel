@@ -467,17 +467,17 @@ def _chunk_fwd_h_kernel_with_same_seq(
         def output_ht():
             nonlocal ht_buf, next_ht_buf
             ht_out_scratch_ref[ht_buf] = o_scratch_ref[...]
-            @pl.when(i > NT)
+            @pl.when(i >= NT)
             def _():
                 nonlocal ht_buf, next_ht_buf
-                _async_copy(ht_out_scratch_ref[next_ht_buf], ht_ref.at[b_slice, h_i, k_slice, v_slice], sems.at[5, next_ht_buf], True)
+                _async_copy(ht_out_scratch_ref.at[next_ht_buf], ht_ref.at[b_slice, h_i, k_slice, v_slice], sems.at[5, next_ht_buf], True)
             
-            _async_copy(ht_out_scratch_ref[ht_buf], ht_ref.at[b_slice, h_i, k_slice, v_slice], sems.at[5, ht_buf])
+            _async_copy(ht_out_scratch_ref.at[ht_buf], ht_ref.at[b_slice, h_i, k_slice, v_slice], sems.at[5, ht_buf])
             
             @pl.when(i == all - 1)
             def _():
                 nonlocal ht_buf, next_ht_buf
-                _async_copy(ht_out_scratch_ref[ht_buf], ht_ref.at[b_slice, h_i, k_slice, v_slice], sems.at[5, ht_buf], True)
+                _async_copy(ht_out_scratch_ref.at[ht_buf], ht_ref.at[b_slice, h_i, k_slice, v_slice], sems.at[5, ht_buf], True)
 
             ht_buf = ht_buf + 1
 
