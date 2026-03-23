@@ -260,7 +260,7 @@ def _chunk_fwd_h_kernel_with_same_seq(
 
     local_B = B // 2
 
-    def _async_copy(src, dst, sem, wait):
+    def _async_copy(src, dst, sem, wait=False):
         cp = pltpu.make_async_copy(src, dst, sem)
         if wait:
             cp.wait()
