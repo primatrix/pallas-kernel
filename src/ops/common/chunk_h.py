@@ -441,6 +441,7 @@ def _chunk_fwd_h_kernel_with_same_seq(
             
             @pl.when(t_i == NT)
             def _():
+                nonlocal h_buf
                 if h0_ref is not None:
                     _async_copy(h0_ref.at[(b_next_slice, h_next_i, k_next_slice, v_next_slice)],
                             h0_scratch_ref.at[next_h_buf],
