@@ -483,7 +483,7 @@ def _chunk_bwd_dh_kernel(
 
         def reset_state(_):
             if dht_ref is not None:
-                return dht_ref[seq_idx, 0]
+                return dht_ref[seq_idx, 0].astype(jnp.float32)
             return jnp.zeros((BK, BV), dtype=jnp.float32)
 
         b_dh = lax.cond(is_last_chunk, reset_state, lambda _: b_dh, operand=None)
@@ -554,24 +554,21 @@ def chunk_bwd_dh_kernel(
     states_in_fp32: bool = False,
     interpret: bool = False,
 ):
-    BK, BV = 128, 128
+    BK, BV, BT = 128, 128, chunk_size
+    BS = BT if split_size is None else split_size
     B, T, H, K = q.shape
     V = do.shape[-1]
+    T_sum = B * T
 
     assert K % 128 == 0, "K % 128 must equal to 0."
     assert V % 128 == 0, "V % 128 must equal to 0."
     assert T % chunk_size == 0, "T mod chunk_size must equal to 0."
-
-    BT = chunk_size
-    BS = BT if split_size is None else split_size
     assert BS % BT == 0, (
         f"The `split_size` (got {BS}) must be a multiple of `chunk_size` {BT}"
     )
 
-    T_sum = B * T
     if cu_seqlens is None:
         cu_seqlens = jnp.arange(T_sum + 1, step=T)
-
     chunk_to_seq = build_chunk_map(cu_seqlens=cu_seqlens, T_sum=T_sum, BT=BT)
     N, NS = len(cu_seqlens) - 1, T_sum // BS
 
@@ -624,7 +621,7 @@ def chunk_bwd_dh_kernel(
         interpret=interpret,
         compiler_params=pltpu.CompilerParams(
             dimension_semantics=("parallel", "parallel", "parallel"),
-            vmem_limit_bytes=128 * 1024 * 1024,
+            vmem_limit_bytes=32 * 1024 * 1024,
         ),
     )(q, do, dht, gk, cu_seqlens, chunk_to_seq)
 

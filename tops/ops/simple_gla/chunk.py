@@ -108,6 +108,7 @@ def chunk_simple_gla_bwd(
         gk=gk,
         do=do,
         dht=dht,
+        output_dh0=(initial_state is not None or dht is not None),
         scale=scale,
         chunk_size=C,
     )
