@@ -333,9 +333,6 @@ def _chunk_fwd_h_kernel_with_same_seq(
         h_buf = jnp.mod(i // NT, 2)
         next_h_buf = jnp.mod(i // NT + 1, 2)
 
-        ht_buf = jnp.mod(i // NT, 2)
-        next_ht_buf = jnp.mod(i // NT + 1, 2)
-
         h_o_buf = jnp.mod(i // NTS, 2)
         next_h_o_buf = jnp.mod(i // NTS + 1, 2)
 
@@ -455,16 +452,16 @@ def _chunk_fwd_h_kernel_with_same_seq(
     
         @pl.when(t_i + 1 == NT)
         def output_ht():
-            ht_out_scratch_ref[ht_buf] = o_scratch_ref[...]
+            ht_out_scratch_ref[h_buf] = o_scratch_ref[...]
             @pl.when(i >= NT)
             def _():
-                _async_copy(ht_out_scratch_ref.at[next_ht_buf], ht_ref.at[b_slice, h_i, k_slice, v_slice], sems.at[5, next_ht_buf], True)
+                _async_copy(ht_out_scratch_ref.at[next_h_buf], ht_ref.at[b_slice, h_i, k_slice, v_slice], sems.at[5, next_h_buf], True)
             
-            _async_copy(ht_out_scratch_ref.at[ht_buf], ht_ref.at[b_slice, h_i, k_slice, v_slice], sems.at[5, ht_buf])
+            _async_copy(ht_out_scratch_ref.at[h_buf], ht_ref.at[b_slice, h_i, k_slice, v_slice], sems.at[5, h_buf])
             
             @pl.when(i == all - 1)
             def _():
-                _async_copy(ht_out_scratch_ref.at[ht_buf], ht_ref.at[b_slice, h_i, k_slice, v_slice], sems.at[5, ht_buf], True)
+                _async_copy(ht_out_scratch_ref.at[h_buf], ht_ref.at[b_slice, h_i, k_slice, v_slice], sems.at[5, h_buf], True)
 
 
 
