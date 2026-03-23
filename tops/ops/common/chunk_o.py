@@ -14,7 +14,7 @@ import jax
 import jax.numpy as jnp
 import jax.experimental.pallas as pl
 from jax.experimental.pallas import tpu as pltpu
-
+from tops.ops.utils import exp
 
 def chunk_simple_gla_bwd_kernel(
     q_ref, k_ref, v_ref, g_gamma_ref, h_ref, a_ref, do_ref, dh_ref,
@@ -161,9 +161,6 @@ def chunk_simple_gla_bwd_o_pl(
     dv = _unreshape(dv, V)
 
     return dq, dk, dv
-import jax
-import jax.numpy as jnp
-from tops.ops.utils import exp
 
 def chunk_fwd_o(
     q: jax.Array,       # [B, T, H, K]

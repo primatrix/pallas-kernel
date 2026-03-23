@@ -30,19 +30,19 @@ print(f"TPU Args: {os.environ.get('LIBTPU_INIT_ARGS')}")
 
 # ---------- cases ----------
 CASES = {
-    # # grid=(1,1,1), 2 chunks — minimal trace
-    # "small_B1": dict(B=1, T=256, H=1, K=128, V=128, chunk_size=128),
-    # # grid=(1,1,1), 4 chunks — see varlen reset
-    # "small_B2": dict(B=2, T=256, H=1, K=128, V=128, chunk_size=128),
-    # # grid=(4,1,1) — parallel over H
-    # "grid_4H": dict(B=1, T=256, H=4, K=128, V=128, chunk_size=128),
-    # # grid=(1,4,1) — parallel over K blocks
-    # "grid_4K": dict(B=1, T=256, H=1, K=512, V=128, chunk_size=128),
-    # # grid=(1,1,4) — parallel over V blocks
-    # "grid_4V": dict(B=1, T=256, H=1, K=128, V=512, chunk_size=128),
-    # # grid=(1,2,2) — parallel over K and V blocks
-    # "grid_2K2V": dict(B=1, T=256, H=1, K=256, V=256, chunk_size=128),
-    "real_train": dict(B=2, T=4096, H=16, K=128, V=128, chunk_size=128),
+    # grid=(1,1,1), 2 chunks — minimal trace
+    "small_B1": dict(B=1, T=256, H=1, K=128, V=128, chunk_size=128),
+    # grid=(1,1,1), 4 chunks — see varlen reset
+    "small_B2": dict(B=2, T=256, H=1, K=128, V=128, chunk_size=128),
+    # grid=(4,1,1) — parallel over H
+    "grid_4H": dict(B=1, T=256, H=4, K=128, V=128, chunk_size=128),
+    # grid=(1,4,1) — parallel over K blocks
+    "grid_4K": dict(B=1, T=256, H=1, K=512, V=128, chunk_size=128),
+    # grid=(1,1,4) — parallel over V blocks
+    "grid_4V": dict(B=1, T=256, H=1, K=128, V=512, chunk_size=128),
+    # grid=(1,2,2) — parallel over K and V blocks
+    "grid_2K2V": dict(B=1, T=256, H=1, K=256, V=256, chunk_size=128),
+    # "real_train": dict(B=2, T=4096, H=16, K=128, V=128, chunk_size=128),
 }
 
 SCALE_FN = lambda K: K**-0.5
