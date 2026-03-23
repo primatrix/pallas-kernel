@@ -319,7 +319,7 @@ def _chunk_fwd_h_kernel_with_same_seq(
                 sems.at[3, 0], False)
         
 
-    @pl.loop(0, all, unroll=True)
+    @pl.loop(0, all, unroll=False)
     def body(i):
 
         b_i, h_i, k_i, v_i, t_i = get_index(i)
@@ -386,11 +386,6 @@ def _chunk_fwd_h_kernel_with_same_seq(
         def store_fn():
             @pl.when(i >= NTS)
             def wait_prev():
-                # pre_nts = i - NTS
-                # b_pre_i, h_pre_i, k_pre_i, v_pre_i, t_pre_i = get_index(pre_nts)
-                # k_pre_slice = pl.ds(k_pre_i * BK, BK)
-                # v_pre_slice = pl.ds(v_pre_i * BV, BV)
-                # b_pre_slice = b_part_i * local_B + b_pre_i
                 _async_copy(
                     h_out_scratch_ref.at[next_h_o_buf],
                     h_ref.at[b_slice, i_s, h_i, k_slice, v_slice],
