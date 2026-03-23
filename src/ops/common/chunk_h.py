@@ -602,7 +602,7 @@ def chunk_fwd_h_kernel_with_same_seq(
         BT=BT,
         BS=BS,
     )
-    scratch_shapes.append(pltpu.SemaphoreType.DMA((5, 2))) ## k, v, gk, h0, h
+    scratch_shapes.append(pltpu.SemaphoreType.DMA((6, 2))) ## k, v, gk, h0, h
     h, ht = pl.pallas_call(
         kernel,
         grid_spec=pltpu.PrefetchScalarGridSpec(
