@@ -240,8 +240,8 @@ def _chunk_fwd_h_kernel_with_same_seq(
     ht_ref,  # [B, H, K , V]
     k_scratch_ref, # [2, BT, BK]
     v_scratch_ref, # [2, BT, BV]
-    gk_scratch_ref, # [2, BT, BK]
     h0_scratch_ref, # [2, BK, BV]
+    gk_scratch_ref, # [2, BT, BK]
     o_scratch_ref, # [BK, BV]
     sems, #
     *,
