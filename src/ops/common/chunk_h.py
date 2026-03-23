@@ -243,6 +243,7 @@ def _chunk_fwd_h_kernel_with_same_seq(
     h0_scratch_ref, # [2, BK, BV]
     gk_scratch_ref, # [2, BT, BK]
     o_scratch_ref, # [BK, BV]
+    h_out_scratch_ref, # [2, BK, BV]
     sems, # [5, 2]
     *,
     BT,
@@ -359,9 +360,20 @@ def _chunk_fwd_h_kernel_with_same_seq(
                                 o_scratch_ref[...] = jnp.zeros((BK, BV), dtype=jnp.float32)
                         
                         i_s = i_t // NTS
+                        store_buf = jnp.mod(i_s, 2)     
+                        prev_buf  = jnp.mod(i_s + 1, 2)
                         @pl.when((i_t % NTS) == 0)
                         def store_fn():
-                            _sync_copy(o_scratch_ref.at[...], h_ref.at[b_slice, i_s, h_i, k_slice, v_slice], sems.at[4, 0])
+                            @pl.when(i_s > 0)
+                            def wait_prev():
+                                _async_copy(
+                                    h_out_scratch_ref.at[prev_buf],
+                                    h_ref.at[b_slice, i_s - 1, h_i, k_slice, v_slice],
+                                    sems.at[4, prev_buf],
+                                    True,
+                                )
+                            h_out_scratch_ref[store_buf] = o_scratch_ref[...]
+                            _async_copy(h_out_scratch_ref.at[store_buf], h_ref.at[b_slice, i_s, h_i, k_slice, v_slice], sems.at[4, store_buf])
 
                         
                         @pl.when(i_t + 1 < NT)
@@ -403,6 +415,7 @@ def _chunk_fwd_h_kernel_with_same_seq(
                     
                         @pl.when(i_t + 1 == NT)
                         def output():
+                            _async_copy(h_out_scratch_ref.at[store_buf], h_ref.at[b_slice, i_s, h_i, k_slice, v_slice], sems.at[4, store_buf], True)
                             _sync_copy(o_scratch_ref.at[...], ht_ref.at[b_slice, h_i, k_slice, v_slice], sems.at[4, 0])
 
                     h_buff = h_buff + 1
@@ -502,6 +515,7 @@ def chunk_fwd_h_kernel_with_same_seq(
     k_scratch = pltpu.VMEM((2, BT, BK), jnp.float32)
     v_scratch = pltpu.VMEM((2, BT, BV), jnp.float32)
     o_scratch = pltpu.VMEM((BK, BV), jnp.float32)
+    h_out_scratch = pltpu.VMEM((2, BK, BV), jnp.float32)
     scratch_shapes = [k_scratch, v_scratch]
     if h0 is not None:
         in_specs.append(pl.BlockSpec(memory_space=pltpu.HBM))
@@ -519,6 +533,7 @@ def chunk_fwd_h_kernel_with_same_seq(
         in_specs.append(None)
 
     scratch_shapes.append(o_scratch)
+    scratch_shapes.append(h_out_scratch)
 
     kernel = functools.partial(
         _chunk_fwd_h_kernel_with_same_seq,

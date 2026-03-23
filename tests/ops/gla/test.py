@@ -6,21 +6,22 @@ LLO_DUMP_PATH = os.path.join(DUMP_ROOT, "llo")
 os.makedirs(HLO_DUMP_PATH, exist_ok=True)
 os.makedirs(LLO_DUMP_PATH, exist_ok=True)
 
-os.environ["XLA_FLAGS"] = (
-    f"--xla_dump_hlo_as_text "
-    f"--xla_dump_to={HLO_DUMP_PATH} "
-    f"--xla_dump_hlo_pass_re=.* "
-)
+if False:
+    os.environ["XLA_FLAGS"] = (
+        f"--xla_dump_hlo_as_text "
+        f"--xla_dump_to={HLO_DUMP_PATH} "
+        f"--xla_dump_hlo_pass_re=.* "
+    )
 
-os.environ["LIBTPU_INIT_ARGS"] = (
-    f"--xla_jf_dump_to={LLO_DUMP_PATH} "
-    f"--xla_jf_dump_hlo_text=true "
-    f"--xla_jf_dump_llo_text=true "
-    f"--xla_jf_dump_llo_html=false "
-    f"--xla_jf_dump_llo_static_gaps=true "
-    f"--xla_jf_emit_annotations=true "
-    f"--xla_jf_debug_level=2"
-)
+    os.environ["LIBTPU_INIT_ARGS"] = (
+        f"--xla_jf_dump_to={LLO_DUMP_PATH} "
+        f"--xla_jf_dump_hlo_text=true "
+        f"--xla_jf_dump_llo_text=true "
+        f"--xla_jf_dump_llo_html=false "
+        f"--xla_jf_dump_llo_static_gaps=true "
+        f"--xla_jf_emit_annotations=true "
+        f"--xla_jf_debug_level=2"
+    )
 
 import jax
 B, T, H, K = 4, 1024, 4, 128
