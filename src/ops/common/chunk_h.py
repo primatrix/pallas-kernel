@@ -311,7 +311,7 @@ def _chunk_fwd_h_kernel_with_same_seq(
                             False,
                         )
                     if h0_ref is not None:
-                        _async_copy(h0_ref.at[(b_slice, h_i,  k_i, v_i)],
+                        _async_copy(h0_ref.at[(b_slice, h_i,  k_slice, v_slice)],
                                 h0_scratch_ref.at[h_buff],
                                 sems.at[3, h_buff], False)
                     
@@ -349,7 +349,7 @@ def _chunk_fwd_h_kernel_with_same_seq(
                                 )
 
                             if h0_ref is not None:
-                                _async_copy(h0_ref.at[(b_slice, h_i,  k_i, v_i)],
+                                _async_copy(h0_ref.at[(b_slice, h_i,  k_slice, v_slice)],
                                         h0_scratch_ref.at[h_buff],
                                         sems.at[3, h_buff], True)
                                     
@@ -364,7 +364,7 @@ def _chunk_fwd_h_kernel_with_same_seq(
                         i_s = i_t // NTS
                         @pl.when((i_t % NTS) == 0)
                         def store_fn():
-                            _sync_copy(o_scratch_ref.at[...], h_ref.at[b_slice, i_s, h_i, k_i, v_i], sems.at[4, 0])
+                            _sync_copy(o_scratch_ref.at[...], h_ref.at[b_slice, i_s, h_i, k_slice, v_slice], sems.at[4, 0])
 
                         
                         @pl.when(i_t + 1 < NT)
