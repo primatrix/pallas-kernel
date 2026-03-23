@@ -243,7 +243,7 @@ def _chunk_fwd_h_kernel_with_same_seq(
     h0_scratch_ref, # [2, BK, BV]
     gk_scratch_ref, # [2, BT, BK]
     o_scratch_ref, # [BK, BV]
-    sems, #
+    sems, # [5, 2]
     *,
     BT,
     BS,
@@ -348,15 +348,15 @@ def _chunk_fwd_h_kernel_with_same_seq(
                                     True,
                                 )
 
-                            if h0_ref is not None:
-                                _async_copy(h0_ref.at[(b_slice, h_i,  k_slice, v_slice)],
-                                        h0_scratch_ref.at[h_buff],
-                                        sems.at[3, h_buff], True)
-                                    
                         wait()
                         @pl.when(i_t == 0)
                         def init():
                             if h0_ref is not None:
+                                # h0 DMA 在循环前只 start 一次，必须在此处（i_t==0）等待，
+                                # 而不能在 wait() 中无条件等待（否则 i_t>=1 时死锁）。
+                                _async_copy(h0_ref.at[(b_slice, h_i, k_slice, v_slice)],
+                                        h0_scratch_ref.at[h_buff],
+                                        sems.at[3, h_buff], True)
                                 o_scratch_ref[...] = h0_scratch_ref[h_buff]
                             else:
                                 o_scratch_ref[...] = jnp.zeros((BK, BV), dtype=jnp.float32)
