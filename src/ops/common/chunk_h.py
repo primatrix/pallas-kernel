@@ -389,8 +389,10 @@ def _chunk_fwd_h_kernel_with_same_seq(
         i_s = t_i // NTS
         @pl.when((t_i % NTS) == 0)
         def store_fn():
+            nonlocal h_o_buf, next_h_o_buf
             @pl.when(h_o_buf > 0)
             def wait_prev():
+                nonlocal h_o_buf, next_h_o_buf
                 pre_nts = i - NTS
                 b_pre_i, h_pre_i, k_pre_i, v_pre_i, t_pre_i = get_index(pre_nts)
                 k_pre_slice = pl.ds(k_pre_i * BK, BK)
@@ -407,6 +409,7 @@ def _chunk_fwd_h_kernel_with_same_seq(
             
             @pl.when(i == all - NTS)
             def _():
+                nonlocal h_o_buf, next_h_o_buf
                 _async_copy(h_out_scratch_ref.at[h_o_buf], h_ref.at[b_slice, i_s, h_i, k_slice, v_slice], sems.at[4, h_o_buf], True)
 
             h_o_buf = h_o_buf + 1
@@ -460,16 +463,18 @@ def _chunk_fwd_h_kernel_with_same_seq(
     
         @pl.when(t_i + 1 == NT)
         def output_ht():
-
+            nonlocal ht_buf, next_ht_buf
             ht_out_scratch_ref[ht_buf] = o_scratch_ref[...]
             @pl.when(ht_buf > 0)
             def _():
+                nonlocal ht_buf, next_ht_buf
                 _async_copy(ht_out_scratch_ref[next_ht_buf], ht_ref.at[b_slice, h_i, k_slice, v_slice], sems.at[5, next_ht_buf], True)
             
-            _async_copy(ht_out_scratch_ref[ht_buf], ht_ref.at[b_slice, h_i, k_slice, v_slice], sems.at[5, ht_buf], True)
+            _async_copy(ht_out_scratch_ref[ht_buf], ht_ref.at[b_slice, h_i, k_slice, v_slice], sems.at[5, ht_buf])
             
             @pl.when(i == all - 1)
             def _():
+                nonlocal ht_buf, next_ht_buf
                 _async_copy(ht_out_scratch_ref[ht_buf], ht_ref.at[b_slice, h_i, k_slice, v_slice], sems.at[5, ht_buf], True)
 
             ht_buf = ht_buf + 1
