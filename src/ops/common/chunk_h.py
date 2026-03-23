@@ -317,15 +317,12 @@ def _chunk_fwd_h_kernel_with_same_seq(
         _async_copy(h0_ref.at[(b_slice, h_i,  k_slice, v_slice)],
                 h0_scratch_ref.at[0],
                 sems.at[3, 0], False)
-        
-    b_i_v, h_i_v, k_i_v, v_i_v, t_i_v = get_index(jnp.arange(all))
-    b_next_i_v, h_next_i_v, k_next_i_v, v_next_i_v, t_next_i_v = get_index(jnp.arange(all) + 1)
 
     @pl.loop(0, all, unroll=True)
     def body(i):
 
-        b_i, h_i, k_i, v_i, t_i = b_i_v[i], h_i_v[i], k_i_v[i], v_i_v[i], t_i_v[i]
-        b_next_i, h_next_i, k_next_i, v_next_i, t_next_i = b_next_i_v[i], h_next_i_v[i], k_next_i_v[i], v_next_i_v[i], t_next_i_v[i]
+        b_i, h_i, k_i, v_i, t_i = get_index(i)
+        b_next_i, h_next_i, k_next_i, v_next_i, t_next_i = get_index(i + 1)
        
 
         buf = jnp.mod(i, 2)
