@@ -558,11 +558,11 @@ def _chunk_bwd_dh_kernel(
 
         # per-head fixed decay (g_gamma)
         if g_gamma is not None:
-            b_g_last = g_gamma[head_index] * jnp.minimum(BT, eos - t0)
-            b_dh *= exp(b_g_last)
-            b_q = (b_q * exp(b_g_ramp)[:, None]).astype(b_q.dtype)
+            b_dh *= exp(b_g_gamma_last)
+            b_q = (b_q * exp(b_g_gamma_ramp)[:, None]).astype(b_q.dtype)
 
         # per-K-dim gate (gk)
+        b_q_hat = (b_q * scale).astype(b_q.dtype)
         if gk_ref is not None:
             b_gk = gk_ref[(0, pl.dslice(t0, BT), slice(None))]  # [BT, BK]
             g_last = b_gk[BT - 1, :]

@@ -870,7 +870,7 @@ def chunk_gla_bwd(
     # Broadcast g_gamma into full g if g is not provided
     if g is None:
         if g_gamma is not None:
-            g = jnp.broadcast_to(g_gamma, q.shape)
+            g = jnp.broadcast_to(g_gamma.reshape(1, 1, H, 1), q.shape)
         else:
             g = jnp.zeros_like(q)
 
@@ -965,14 +965,18 @@ def chunk_gla_bwd(
         dg = dg[:, :T]
 
     if g_orig is None and g_gamma is not None:
-        # Sum-reduce dg to match g_gamma's shape
-        for i, (d_full, d_gamma) in enumerate(zip(dg.shape[::-1], g_gamma.shape[::-1])):
-            if d_full != d_gamma:
-                dg = jnp.sum(dg, axis=len(dg.shape) - 1 - i, keepdims=True)
-        missing_dims = len(dg.shape) - len(g_gamma.shape)
-        if missing_dims > 0:
-            dg = jnp.sum(dg, axis=tuple(range(missing_dims)))
-        dg = dg.reshape(g_gamma.shape)
+        # Sum-reduce dg [B, T, H, K] to match g_gamma's shape
+        if g_gamma.ndim == 1:
+            # g_gamma is (H,) — sum over B, T, K (keep axis 2)
+            dg = jnp.sum(dg, axis=(0, 1, 3))
+        else:
+            for i, (d_full, d_gamma) in enumerate(zip(dg.shape[::-1], g_gamma.shape[::-1])):
+                if d_full != d_gamma:
+                    dg = jnp.sum(dg, axis=len(dg.shape) - 1 - i, keepdims=True)
+            missing_dims = len(dg.shape) - len(g_gamma.shape)
+            if missing_dims > 0:
+                dg = jnp.sum(dg, axis=tuple(range(missing_dims)))
+            dg = dg.reshape(g_gamma.shape)
 
     return dq, dk, dv, dg, dh0
 
@@ -1006,7 +1010,7 @@ def chunk_gla_bwd_with_pl(
     # Broadcast g_gamma into full g if g is not provided
     if g is None:
         if g_gamma is not None:
-            g = jnp.broadcast_to(g_gamma, q.shape)
+            g = jnp.broadcast_to(g_gamma.reshape(1, 1, H, 1), q.shape)
         else:
             g = jnp.zeros_like(q)
 
@@ -1021,7 +1025,7 @@ def chunk_gla_bwd_with_pl(
             _, T_pad, _, _ = q.shape
             pos = jnp.arange(1, C + 1, dtype=jnp.float32)
             pos = jnp.tile(pos, T_pad // C).reshape(1, T_pad, 1, 1)
-            g_cumsum = jnp.broadcast_to(g_gamma * pos, q.shape)
+            g_cumsum = jnp.broadcast_to(g_gamma.reshape(1, 1, H, 1) * pos, q.shape)
         else:
             g_cumsum = chunk_local_cumsum_vector(g, C, cu_seqlens=cu_seqlens)
 
@@ -1063,14 +1067,18 @@ def chunk_gla_bwd_with_pl(
     )
 
     if g_orig is None and g_gamma is not None:
-        # Sum-reduce dg to match g_gamma's shape
-        for i, (d_full, d_gamma) in enumerate(zip(dg.shape[::-1], g_gamma.shape[::-1])):
-            if d_full != d_gamma:
-                dg = jnp.sum(dg, axis=len(dg.shape) - 1 - i, keepdims=True)
-        missing_dims = len(dg.shape) - len(g_gamma.shape)
-        if missing_dims > 0:
-            dg = jnp.sum(dg, axis=tuple(range(missing_dims)))
-        dg = dg.reshape(g_gamma.shape)
+        # Sum-reduce dg [B, T, H, K] to match g_gamma's shape
+        if g_gamma.ndim == 1:
+            # g_gamma is (H,) — sum over B, T, K (keep axis 2)
+            dg = jnp.sum(dg, axis=(0, 1, 3))
+        else:
+            for i, (d_full, d_gamma) in enumerate(zip(dg.shape[::-1], g_gamma.shape[::-1])):
+                if d_full != d_gamma:
+                    dg = jnp.sum(dg, axis=len(dg.shape) - 1 - i, keepdims=True)
+            missing_dims = len(dg.shape) - len(g_gamma.shape)
+            if missing_dims > 0:
+                dg = jnp.sum(dg, axis=tuple(range(missing_dims)))
+            dg = dg.reshape(g_gamma.shape)
 
     return dq, dk, dv, dg, dh0
 
@@ -1113,7 +1121,7 @@ def chunk_gla_fwd(
 
     if g is None:
         if g_gamma is not None:
-            g = jnp.broadcast_to(g_gamma, q.shape)
+            g = jnp.broadcast_to(g_gamma.reshape(1, 1, H, 1), q.shape)
         else:
             g = jnp.zeros_like(q)
 
@@ -1140,7 +1148,7 @@ def chunk_gla_fwd(
             _, T_pad, _, _ = q.shape
             pos = jnp.arange(1, C + 1, dtype=jnp.float32)
             pos = jnp.tile(pos, T_pad // C).reshape(1, T_pad, 1, 1)
-            g_cumsum = jnp.broadcast_to(g_gamma * pos, q.shape)
+            g_cumsum = jnp.broadcast_to(g_gamma.reshape(1, 1, H, 1) * pos, q.shape)
         else:
             g_cumsum = chunk_local_cumsum_vector(g, C, cu_seqlens=cu_seqlens)
 

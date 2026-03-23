@@ -32,10 +32,10 @@ def _torch_to_jax(t: torch.Tensor) -> jax.Array:
 
 
 def _make_g_gamma(H, seed=0):
-    """Create per-head g_gamma (1, 1, H, 1) with small negative values."""
+    """Create per-head g_gamma (H,) with small negative values."""
     rng = np.random.RandomState(seed)
     vals = -np.abs(rng.randn(H)) * 0.1
-    return jnp.array(vals, dtype=jnp.float32).reshape(1, 1, H, 1)
+    return jnp.array(vals, dtype=jnp.float32)
 
 
 # ============================================================================
@@ -85,7 +85,7 @@ def test_simple_gla_intra_ref_vs_full_gla(cfg):
         q, k = (pad_to_multiple(x, C, axis=1, val=0) for x in (q, k))
 
     # Full GLA reference with broadcast g_cumsum
-    g_full = jnp.broadcast_to(g_gamma, q.shape)
+    g_full = jnp.broadcast_to(g_gamma.reshape(1, 1, H, 1), q.shape)
     g_cumsum = chunk_local_cumsum_ref(g_full, C)
     A_full = chunk_gla_fwd_intra_gk_ref(q, k, g_cumsum, scale, chunk_size=C)
 
@@ -116,7 +116,7 @@ def test_simple_gla_fwd_ref_vs_full_gla(cfg):
     q_p, k_p, v_p = q, k, v
     if T % C != 0:
         q_p, k_p, v_p = (pad_to_multiple(x, C, axis=1, val=0) for x in (q_p, k_p, v_p))
-    g_full = jnp.broadcast_to(g_gamma, q_p.shape)
+    g_full = jnp.broadcast_to(g_gamma.reshape(1, 1, H, 1), q_p.shape)
     g_cumsum = chunk_local_cumsum_ref(g_full, C)
     h_ref, ht_ref = chunk_fwd_h_ref(k_p, v_p, gk=g_cumsum, h0=h0,
                                      output_final_state=True, chunk_size=C)
@@ -180,7 +180,7 @@ def test_simple_gla_output_pallas_vs_ref(cfg):
     g_gamma = _make_g_gamma(H, seed=cfg["seed"] + 1000)
 
     # Compute h and A using reference
-    g_full = jnp.broadcast_to(g_gamma, q.shape)
+    g_full = jnp.broadcast_to(g_gamma.reshape(1, 1, H, 1), q.shape)
     g_cumsum = chunk_local_cumsum_ref(g_full, C)
     h, _ = chunk_fwd_h_ref(k, v, gk=g_cumsum, h0=None,
                            output_final_state=False, chunk_size=C)
@@ -227,9 +227,9 @@ def test_simple_gla_fwd_pallas_vs_ref(cfg):
 
 
 BWD_CASES = [
-    dict(B=2, T=32, H=4, K=32, V=64, seed=42),
-    dict(B=1, T=64, H=2, K=16, V=32, seed=7),
-    dict(B=2, T=32, H=4, K=32, V=64, seed=10, h0=True),
+    dict(B=2, T=64, H=4, K=128, V=128, seed=42),
+    dict(B=1, T=128, H=2, K=128, V=128, seed=7),
+    dict(B=2, T=64, H=4, K=128, V=128, seed=10, h0=True),
 ]
 
 
@@ -249,8 +249,9 @@ def test_simple_gla_bwd_vs_full_gla(cfg):
 
     # Simple GLA backward
     dq1, dk1, dv1, dg1, dh01 = chunk_simple_gla_bwd(
-        q, k, v, g_gamma, scale, initial_state=h0,
-        do=do, dht=None, chunk_size=16,
+        q, k, v, do,
+        g_gamma=g_gamma, h0=h0,
+        scale=scale, dht=None, chunk_size=16,
     )
 
     # Full GLA backward (direct)
@@ -264,7 +265,9 @@ def test_simple_gla_bwd_vs_full_gla(cfg):
     assert compare_tensor("bwd dq", dq2, dq1, atol=1e-5, rtol=1e-5)
     assert compare_tensor("bwd dk", dk2, dk1, atol=1e-5, rtol=1e-5)
     assert compare_tensor("bwd dv", dv2, dv1, atol=1e-5, rtol=1e-5)
-    assert compare_tensor("bwd dg", dg2, dg1, atol=1e-5, rtol=1e-5)
+    # dg comparison: only valid when g is an input; with g_gamma only, dg1 is None
+    if dg1 is not None and dg2 is not None:
+        assert compare_tensor("bwd dg", dg2, dg1, atol=1e-5, rtol=1e-5)
     if h0 is not None:
         assert compare_tensor("bwd dh0", dh02, dh01, atol=1e-5, rtol=1e-5)
 

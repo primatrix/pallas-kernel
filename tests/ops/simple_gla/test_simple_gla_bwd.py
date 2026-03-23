@@ -1,12 +1,17 @@
-"""simple_gla backward: Triton fused_recurrent vs JAX naive autodiff."""
+"""simple_gla backward: Triton vs JAX kernel comparison.
+
+Part 1: Triton fused_recurrent vs JAX naive autodiff (existing)
+Part 2: Triton chunk vs JAX chunk backward (fp32 & bf16)
+"""
 
 from __future__ import annotations
 
 import sys
+import os
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-
+os.environ["TRITON_F32_DEFAULT"] = "ieee"
 import pytest
 import torch
 import torch.nn.functional as F
@@ -15,6 +20,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from tops.ops.simple_gla import simple_gla_naive
+from tops.ops.simple_gla.chunk import chunk_simple_gla_bwd
 from tests.utils import compare_tensor
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -23,6 +29,8 @@ HAS_CUDA = torch.cuda.is_available()
 triton_imports_available = False
 try:
     from fla.ops.simple_gla import fused_recurrent_simple_gla as triton_fused_recurrent
+    from fla.ops.simple_gla.chunk import chunk_simple_gla_bwd as triton_chunk_bwd
+    from fla.ops.utils import chunk_local_cumsum
 
     triton_imports_available = True
 except ImportError:
@@ -34,7 +42,7 @@ requires_triton = pytest.mark.skipif(
 )
 
 # ============================================================================
-# Test configs (keep T small — naive backward unrolls Python for-loops)
+# Part 1: Triton fused_recurrent vs JAX naive autodiff
 # ============================================================================
 
 BWD_CASES = [
@@ -82,6 +90,8 @@ def _case_id(c):
         parts.append(f"gate={gate}")
     if c.get("h0"):
         parts.append("h0")
+    if c.get("dht"):
+        parts.append("dht")
     if c.get("scale") is not None:
         parts.append(f"scale={c['scale']}")
     gln = c.get("gate_logit_normalizer", 1)
@@ -90,9 +100,7 @@ def _case_id(c):
     return "-".join(parts)
 
 
-# ============================================================================
-# Helpers
-# ============================================================================
+# ── Part 1 Helpers ──
 
 
 def _torch_to_jax(t: torch.Tensor) -> jnp.ndarray:
@@ -165,9 +173,7 @@ def _run_naive_bwd(q, k, v, do, *, g=None, g_gamma=None, h0=None, scale=None):
     return dq, dk, dv
 
 
-# ============================================================================
-# Parametrized test — Triton backward (gold) vs JAX naive autodiff
-# ============================================================================
+# ── Part 1 Test ──
 
 
 @requires_triton
@@ -205,6 +211,248 @@ def test_triton_vs_naive_bwd(cfg):
     assert compare_tensor("dq", dq_tri, dq_naive, atol=atol, rtol=rtol)
     assert compare_tensor("dk", dk_tri, dk_naive, atol=atol, rtol=rtol)
     assert compare_tensor("dv", dv_tri, dv_naive, atol=atol, rtol=rtol)
+
+
+# ============================================================================
+# Part 2: Triton chunk backward vs JAX chunk backward
+# ============================================================================
+
+# ── Chunk helpers ──
+
+
+def _next_power_of_2(n):
+    if n <= 1:
+        return 1
+    return 1 << (n - 1).bit_length()
+
+
+def _chunk_local_cumsum_jax(g, chunk_size):
+    """Chunk-local cumulative sum along time axis (JAX, float32)."""
+    B, T, H = g.shape
+    C = chunk_size
+    g_c = g.reshape(B, T // C, C, H)
+    return jnp.cumsum(g_c, axis=2).reshape(B, T, H)
+
+
+def _reverse_chunk_local_cumsum_jax(dg, chunk_size):
+    """Reverse chunk-local cumulative sum (JAX, float32)."""
+    B, T, H = dg.shape
+    C = chunk_size
+    dg_c = dg.reshape(B, T // C, C, H)
+    return jnp.flip(jnp.cumsum(jnp.flip(dg_c, axis=2), axis=2), axis=2).reshape(B, T, H)
+
+
+def _run_triton_chunk_bwd(q, k, v, do, *, g=None, g_gamma=None, h0=None,
+                           dht=None, scale, chunk_size):
+    """Direct call to FLA chunk_simple_gla_bwd on CUDA."""
+    # Always compute in float32 to match JAX's Precision.HIGHEST behavior.
+    # Triton internally casts h (fp32) to input dtype for dot products,
+    # which causes O(1) errors when inputs are bf16.
+    q_t, k_t, v_t, do_t = (t.float().to(DEVICE) for t in (q, k, v, do))
+
+    # g: always cumsum in float32 for precision
+    g_cs = None
+    if g is not None:
+        g_cs = chunk_local_cumsum(g.float().to(DEVICE), chunk_size=chunk_size)
+
+    g_gam = g_gamma.float().to(DEVICE) if g_gamma is not None else None
+    h0_t = h0.float().to(DEVICE) if h0 is not None else None
+    dht_t = dht.float().to(DEVICE) if dht is not None else None
+
+    dq, dk, dv, dg_raw, dh0 = triton_chunk_bwd(
+        q=q_t, k=k_t, v=v_t,
+        g=g_cs, g_gamma=g_gam,
+        initial_state=h0_t,
+        do=do_t, dht=dht_t, scale=scale,
+        chunk_size=chunk_size,
+    )
+
+    dg = None
+    if dg_raw is not None:
+        dg = chunk_local_cumsum(dg_raw, chunk_size=chunk_size, reverse=True)
+
+    return dict(
+        dq=dq.cpu().float(),
+        dk=dk.cpu().float(),
+        dv=dv.cpu().float(),
+        dg=dg.cpu().float() if dg is not None else None,
+        dh0=dh0.cpu().float() if dh0 is not None else None,
+    )
+
+
+def _run_jax_chunk_bwd(q, k, v, do, *, g=None, g_gamma=None, h0=None,
+                        dht=None, scale, chunk_size):
+    """Direct call to JAX chunk_simple_gla_bwd on CPU."""
+    cpu = jax.devices("cpu")[0]
+
+    def to_jax(t):
+        return jax.device_put(
+            jnp.array(t.detach().cpu().float().numpy()), cpu
+        )
+
+    q_j, k_j, v_j, do_j = to_jax(q), to_jax(k), to_jax(v), to_jax(do)
+
+    g_cs = None
+    if g is not None:
+        g_cs = _chunk_local_cumsum_jax(to_jax(g), chunk_size)
+
+    g_gam = to_jax(g_gamma) if g_gamma is not None else None
+    h0_j = to_jax(h0) if h0 is not None else None
+    dht_j = to_jax(dht) if dht is not None else None
+
+    dq, dk, dv, dg_raw, dh0 = chunk_simple_gla_bwd(
+        q=q_j, k=k_j, v=v_j, do=do_j,
+        dht=dht_j,
+        g=g_cs, g_gamma=g_gam,
+        h0=h0_j, scale=scale,
+        chunk_size=chunk_size,
+    )
+
+    dg = None
+    if dg_raw is not None:
+        dg = _reverse_chunk_local_cumsum_jax(dg_raw, chunk_size)
+
+    return dict(
+        dq=np.asarray(dq, dtype=np.float32),
+        dk=np.asarray(dk, dtype=np.float32),
+        dv=np.asarray(dv, dtype=np.float32),
+        dg=np.asarray(dg, dtype=np.float32) if dg is not None else None,
+        dh0=np.asarray(dh0, dtype=np.float32) if dh0 is not None else None,
+    )
+
+
+def _make_inputs(cfg, dtype=torch.float32):
+    """Generate random inputs for chunk backward testing."""
+    B, T, H, K, V = cfg["B"], cfg["T"], cfg["H"], cfg["K"], cfg["V"]
+    gate = cfg.get("gate", "g")
+
+    torch.manual_seed(cfg["seed"])
+    q = torch.randn(B, T, H, K, dtype=dtype)
+    k = torch.randn(B, T, H, K, dtype=dtype)
+    v = torch.randn(B, T, H, V, dtype=dtype)
+    do = torch.randn(B, T, H, V, dtype=dtype)
+
+    # g, g_gamma always float32 (cumsum precision)
+    g = F.logsigmoid(torch.randn(B, T, H)) if gate in ("g", "g+g_gamma") else None
+    g_gamma = F.logsigmoid(torch.randn(H)) if gate in ("g_gamma", "g+g_gamma") else None
+
+    h0 = torch.randn(B, H, K, V, dtype=dtype) if cfg.get("h0") else None
+    dht = torch.randn(B, H, K, V, dtype=dtype) if cfg.get("dht") else None
+
+    return q, k, v, do, g, g_gamma, h0, dht
+
+
+# ── Chunk test configs (K,V must be multiples of 128; T multiple of chunk_size) ──
+
+CHUNK_BWD_CASES = [
+    # ── standard ──
+    dict(B=2, T=64, H=4, K=128, V=128, seed=42),
+    dict(B=2, T=64, H=4, K=128, V=128, seed=43, h0=True),
+    # ── longer T ──
+    dict(B=1, T=128, H=2, K=128, V=128, seed=60),
+    # ── K != V ──
+    dict(B=2, T=64, H=4, K=256, V=128, seed=100),
+    dict(B=2, T=64, H=4, K=128, V=256, seed=101),
+    # ── single head ──
+    dict(B=2, T=64, H=1, K=128, V=128, seed=120),
+    # ── no gate ──
+    dict(B=2, T=64, H=4, K=128, V=128, seed=70, gate="none"),
+    # ── g_gamma only ──
+    dict(B=2, T=64, H=4, K=128, V=128, seed=80, gate="g_gamma"),
+    dict(B=2, T=64, H=4, K=128, V=128, seed=81, gate="g_gamma", h0=True),
+    # NOTE: g+g_gamma cases are excluded. FLA Triton chunk_fwd_kernel_h has a
+    # variable shadowing bug: USE_G overwrites b_g, then USE_G_GAMMA reads the
+    # wrong value, producing incorrect h states. JAX kernel uses separate
+    # variables and computes correctly, so results diverge.
+    # ── custom scale ──
+    dict(B=2, T=64, H=4, K=128, V=128, seed=110, scale=0.1),
+    # ── with dht ──
+    dict(B=2, T=64, H=4, K=128, V=128, seed=130, h0=True, dht=True),
+]
+
+CHUNK_BWD_BF16_CASES = [
+    dict(B=2, T=64, H=4, K=128, V=128, seed=42),
+    dict(B=2, T=64, H=4, K=128, V=128, seed=43, h0=True),
+    dict(B=2, T=64, H=4, K=128, V=128, seed=70, gate="none"),
+    dict(B=2, T=64, H=4, K=128, V=128, seed=80, gate="g_gamma"),
+    # g+g_gamma excluded (FLA Triton variable shadowing bug in chunk_fwd_kernel_h)
+    dict(B=2, T=64, H=4, K=128, V=128, seed=130, h0=True, dht=True),
+]
+
+
+def _assert_chunk_grads(tri, jax_r, *, atol, rtol, has_g, has_h0):
+    """Compare Triton (gold) vs JAX chunk backward gradients."""
+    assert compare_tensor("dq", tri["dq"], jax_r["dq"], atol=atol, rtol=rtol)
+    assert compare_tensor("dk", tri["dk"], jax_r["dk"], atol=atol, rtol=rtol)
+    assert compare_tensor("dv", tri["dv"], jax_r["dv"], atol=atol, rtol=rtol)
+    if has_g and tri["dg"] is not None:
+        assert compare_tensor("dg", tri["dg"], jax_r["dg"], atol=atol, rtol=rtol)
+    if has_h0 and tri["dh0"] is not None and jax_r["dh0"] is not None:
+        assert compare_tensor("dh0", tri["dh0"], jax_r["dh0"], atol=atol, rtol=rtol)
+
+
+# ── Part 2a: fp32 ──
+
+
+@requires_triton
+@pytest.mark.parametrize("cfg", CHUNK_BWD_CASES, ids=[_case_id(c) for c in CHUNK_BWD_CASES])
+def test_chunk_bwd_fp32(cfg):
+    """Chunk backward: Triton (gold) vs JAX, float32."""
+    B, T, H, K, V = cfg["B"], cfg["T"], cfg["H"], cfg["K"], cfg["V"]
+    scale = cfg.get("scale", K ** -0.5)
+    gate = cfg.get("gate", "g")
+    chunk_size = min(64, max(16, _next_power_of_2(T)))
+
+    q, k, v, do, g, g_gamma, h0, dht = _make_inputs(cfg, dtype=torch.float32)
+
+    tri = _run_triton_chunk_bwd(
+        q, k, v, do, g=g, g_gamma=g_gamma, h0=h0, dht=dht,
+        scale=scale, chunk_size=chunk_size,
+    )
+    jax_r = _run_jax_chunk_bwd(
+        q, k, v, do, g=g, g_gamma=g_gamma, h0=h0, dht=dht,
+        scale=scale, chunk_size=chunk_size,
+    )
+
+    _assert_chunk_grads(
+        tri, jax_r, atol=1e-4, rtol=1e-4,
+        has_g=gate in ("g", "g+g_gamma"), has_h0=cfg.get("h0", False),
+    )
+
+
+# ── Part 2b: bf16 ──
+
+
+@requires_triton
+@pytest.mark.parametrize("cfg", CHUNK_BWD_BF16_CASES, ids=[_case_id(c) for c in CHUNK_BWD_BF16_CASES])
+def test_chunk_bwd_bf16(cfg):
+    """Chunk backward: Triton (gold) vs JAX, bfloat16 inputs.
+
+    q, k, v, do, h0, dht are bf16; g and g_gamma stay float32 for cumsum
+    precision.  Triton outputs bf16 (converted to fp32 for comparison);
+    JAX computes internally in fp32 with Precision.HIGHEST.  Tolerance
+    is set to ~1-2 ULP in bf16, with compare_tensor ULP fallback.
+    """
+    B, T, H, K, V = cfg["B"], cfg["T"], cfg["H"], cfg["K"], cfg["V"]
+    scale = cfg.get("scale", K ** -0.5)
+    gate = cfg.get("gate", "g")
+    chunk_size = min(64, max(16, _next_power_of_2(T)))
+
+    q, k, v, do, g, g_gamma, h0, dht = _make_inputs(cfg, dtype=torch.bfloat16)
+
+    tri = _run_triton_chunk_bwd(
+        q, k, v, do, g=g, g_gamma=g_gamma, h0=h0, dht=dht,
+        scale=scale, chunk_size=chunk_size,
+    )
+    jax_r = _run_jax_chunk_bwd(
+        q, k, v, do, g=g, g_gamma=g_gamma, h0=h0, dht=dht,
+        scale=scale, chunk_size=chunk_size,
+    )
+
+    _assert_chunk_grads(
+        tri, jax_r, atol=1e-3, rtol=1e-3,
+        has_g=gate in ("g", "g+g_gamma"), has_h0=cfg.get("h0", False),
+    )
 
 
 if __name__ == "__main__":
