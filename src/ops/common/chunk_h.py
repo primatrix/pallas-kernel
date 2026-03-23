@@ -244,6 +244,7 @@ def _chunk_fwd_h_kernel_with_same_seq(
     gk_scratch_ref, # [2, BT, BK]
     o_scratch_ref, # [BK, BV]
     h_out_scratch_ref, # [2, BK, BV]
+    ht_out_scratch_ref, # [2, BK, BV]
     sems, # [5, 2]
     *,
     BT,
@@ -266,160 +267,212 @@ def _chunk_fwd_h_kernel_with_same_seq(
             cp.wait()
         else:
             cp.start()
-    
-    def _sync_copy(src, dst, sem):
-        cp = pltpu.make_async_copy(src, dst, sem)
-        cp.start()
-        cp.wait()
 
-    h_buff = 0
-    @pl.loop(0, local_B, unroll=True)
-    def body(b_i):
-        @pl.loop(0, H, unroll=True)
-        def inner_body(h_i):
-            @pl.loop(0, NK, unroll=True)
-            def k_body(k_i):
-                @pl.loop(0, NV, unroll=True)
-                def v_body(v_i):
-                    nonlocal h_buff
-                    h_buff = jnp.mod(h_buff, 2)
-
-                    k_slice = pl.ds(k_i * BK, BK)
-                    v_slice = pl.ds(v_i * BV, BV)
-                    b_slice = b_part_i * local_B + b_i
+    all = local_B * H * NK * NV * NT
+    h_sum = H * NK * NV * NT
+    NK_sum = NK * NV * NT
+    NV_sum = NV * NT
 
 
-                    t_dslice = pl.dslice(0, BT)
-                    _async_copy(
-                        k_ref.at[(b_slice, h_i,  t_dslice, k_slice)],
-                        k_scratch_ref.at[0],
-                        sems.at[0, 0],
-                        False,
-                    )
-                    _async_copy(
-                        v_ref.at[(b_slice, h_i, t_dslice, v_slice)],
-                        v_scratch_ref.at[0],
-                        sems.at[1, 0],
-                        False
-                    )
+    def get_index(i):
+        b_i = i // h_sum
+        b_mod_i = i % (h_sum)
+        h_i = b_mod_i // NK_sum
+        h_mod_i = b_mod_i % NK_sum
+        k_i = h_mod_i // NV_sum
+        k_mod_i = h_mod_i % NV_sum
+        v_i = k_mod_i // NT
+        t_i = k_mod_i % NT
+        return b_i, h_i, k_i, v_i, t_i
 
-                    if gk_ref is not None:
-                        _async_copy(
-                            gk_ref.at[(b_slice, h_i,  t_dslice, k_slice)],
-                            gk_scratch_ref.at[0],
-                            sems.at[2, 0],
-                            False,
-                        )
-                    if h0_ref is not None:
-                        _async_copy(h0_ref.at[(b_slice, h_i,  k_slice, v_slice)],
-                                h0_scratch_ref.at[h_buff],
-                                sems.at[3, h_buff], False)
-                    
+    b_i, h_i, k_i, v_i, t_i = get_index(0)
+    k_slice = pl.ds(k_i * BK, BK)
+    v_slice = pl.ds(v_i * BV, BV)
+    b_slice = b_part_i * local_B + b_i
+    t_dslice = pl.ds(t_i * BT, BT)
+    h_buf = 0
+    ht_buf = 0
+    h_o_buf = 0
 
-                    @pl.loop(0, NT, unroll=True)
-                    def t_body(i_t):
-                        buf = jnp.mod(i_t , 2)
-                        next_buf = jnp.mod(i_t + 1,  2)
+    _async_copy(
+            k_ref.at[(b_slice, h_i, t_dslice, k_slice)],
+            k_scratch_ref.at[0],
+            sems.at[0, 0],
+            False,
+    )
 
-                        def wait():
-                            t_curr = i_t * BT
-                            pl_dslice = pl.dslice(t_curr, BT)
-                            k_dslice = pl.dslice(k_i * BK, BK)
-                            v_dslice = pl.dslice(v_i * BV, BV)
+    _async_copy(
+        v_ref.at[(b_slice, h_i, t_dslice, v_slice)],
+        v_scratch_ref.at[0],
+        sems.at[1, 0],
+        False
+    )
 
-                            _async_copy(
-                                k_ref.at[(b_slice, h_i,  pl_dslice, k_dslice)],
-                                k_scratch_ref.at[buf],
-                                sems.at[0, buf],
-                                True,
-                            )
-                            _async_copy(
-                                v_ref.at[(b_slice, h_i, pl_dslice, v_dslice)],
-                                v_scratch_ref.at[buf],
-                                sems.at[1, buf],
-                                True
-                            )
+    if gk_ref is not None:
+        _async_copy(
+            gk_ref.at[(b_slice, h_i,  t_dslice, k_slice)],
+            gk_scratch_ref.at[0],
+            sems.at[2, 0],
+            False,
+        )
 
-                            if gk_ref is not None:
-                                _async_copy(
-                                    gk_ref.at[(b_slice, h_i,  pl_dslice, k_dslice)],
-                                    gk_scratch_ref.at[buf],
-                                    sems.at[2, buf],
-                                    True,
-                                )
-
-                        wait()
-                        @pl.when(i_t == 0)
-                        def init():
-                            if h0_ref is not None:
-                                _async_copy(h0_ref.at[(b_slice, h_i, k_slice, v_slice)],
-                                        h0_scratch_ref.at[h_buff],
-                                        sems.at[3, h_buff], True)
-                                o_scratch_ref[...] = h0_scratch_ref[h_buff]
-                            else:
-                                o_scratch_ref[...] = jnp.zeros((BK, BV), dtype=jnp.float32)
-                        
-                        i_s = i_t // NTS
-                        store_buf = jnp.mod(i_s, 2)     
-                        prev_buf  = jnp.mod(i_s + 1, 2)
-                        @pl.when((i_t % NTS) == 0)
-                        def store_fn():
-                            @pl.when(i_s > 0)
-                            def wait_prev():
-                                _async_copy(
-                                    h_out_scratch_ref.at[prev_buf],
-                                    h_ref.at[b_slice, i_s - 1, h_i, k_slice, v_slice],
-                                    sems.at[4, prev_buf],
-                                    True,
-                                )
-                            h_out_scratch_ref[store_buf] = o_scratch_ref[...]
-                            _async_copy(h_out_scratch_ref.at[store_buf], h_ref.at[b_slice, i_s, h_i, k_slice, v_slice], sems.at[4, store_buf])
-
-                        
-                        @pl.when(i_t + 1 < NT)
-                        def do_prefetch():
-                            t0 = (i_t + 1) * BT
-                            t_dslice = pl.dslice(t0, BT)
-                            _async_copy(
-                                k_ref.at[(b_slice, h_i,  t_dslice, k_slice)],
-                                k_scratch_ref.at[next_buf],
-                                sems.at[0, next_buf],
-                                False,
-                            )
-                            _async_copy(
-                                v_ref.at[(b_slice, h_i, t_dslice, v_slice)],
-                                v_scratch_ref.at[next_buf],
-                                sems.at[1, next_buf],
-                                False
-                            )
-
-                            if gk_ref is not None:
-                                _async_copy(
-                                    gk_ref.at[(b_slice, h_i,  t_dslice, k_slice)],
-                                    gk_scratch_ref.at[next_buf],
-                                    sems.at[2, next_buf],
-                                    False,
-                                )
-
-                        k_tile = k_scratch_ref[buf]
-                        v_tile = v_scratch_ref[buf]
-                        if gk_ref is not None:
-                            gk_tile = gk_scratch_ref[buf]
-                            g_last = gk_tile[-1, :]
-                            decay = jnp.exp(g_last)
-                            o_scratch_ref[...] = o_scratch_ref[...] * decay[:, None]  # [BK, BV] * [BK,1]
-                            k_tile = (k_tile * jnp.exp(g_last[None, :] - gk_tile)).astype(gk_tile.dtype)
-
-                        o_scratch_ref[...] = o_scratch_ref[...] + jax.lax.dot(k_tile.T, v_tile)      
+    if h0_ref is not None:
+        _async_copy(h0_ref.at[(b_slice, h_i,  k_slice, v_slice)],
+                h0_scratch_ref.at[0],
+                sems.at[3, 0], False)
         
-                    
-                        @pl.when(i_t + 1 == NT)
-                        def output():
-                            _async_copy(h_out_scratch_ref.at[store_buf], h_ref.at[b_slice, i_s, h_i, k_slice, v_slice], sems.at[4, store_buf], True)
-                            _sync_copy(o_scratch_ref.at[...], ht_ref.at[b_slice, h_i, k_slice, v_slice], sems.at[4, 0])
 
-                    h_buff = h_buff + 1
+    @pl.loop(0, all, unroll=True)
+    def body(i):
+        nonlocal h_buf, ht_buf, h_o_buf
+
+        b_i, h_i, k_i, v_i, t_i = get_index(i)
+        b_next_i, h_next_i, k_next_i, v_next_i, t_next_i = get_index(i + 1)
+       
+
+        buf = jnp.mod(i, 2)
+        next_buf = jnp.mod(i + 1, 2)
+
+        h_buf = jnp.mod(h_buf, 2)
+        next_h_buf = jnp.mod(h_buf + 1, 2)
+
+        ht_buf = jnp.mod(ht_buf, 2)
+        next_ht_buf = jnp.mod(ht_buf + 1, 2)
+
+        h_o_buf = jnp.mod(h_o_buf, 2)
+        next_h_o_buf = jnp.mod(h_o_buf + 1, 2)
+
+        k_slice = pl.ds(k_i * BK, BK)
+        v_slice = pl.ds(v_i * BV, BV)
+        b_slice = b_part_i * local_B + b_i
+        t_slice = pl.ds(t_i * BT, BT)
+
+        k_next_slice = pl.ds(k_next_i * BK, BK)
+        v_next_slice = pl.ds(v_next_i * BV, BV)
+        b_next_slice = b_part_i * local_B + b_next_i
+        t_next_slice = pl.ds(t_next_i * BT, BT)
+
+
+        def wait():
+            _async_copy(
+                k_ref.at[(b_slice, h_i,  t_slice, k_slice)],
+                k_scratch_ref.at[buf],
+                sems.at[0, buf],
+                True,
+            )
+            _async_copy(
+                v_ref.at[(b_slice, h_i, t_slice, v_slice)],
+                v_scratch_ref.at[buf],
+                sems.at[1, buf],
+                True
+            )
+
+            if gk_ref is not None:
+                _async_copy(
+                    gk_ref.at[(b_slice, h_i,  t_slice, k_slice)],
+                    gk_scratch_ref.at[buf],
+                    sems.at[2, buf],
+                    True,
+                )
+            @pl.when(t_i == 0)
+            def _():
+                if h0_ref is not None:
+                    _async_copy(h0_ref.at[(b_slice, h_i, k_slice, v_slice)],
+                            h0_scratch_ref.at[h_buf],
+                            sems.at[3, h_buf], True)
+                    o_scratch_ref[...] = h0_scratch_ref[h_buf]
+                else:
+                    o_scratch_ref[...] = jnp.zeros((BK, BV), dtype=jnp.float32)
+
+
+
+        i_s = t_i // NTS
+        @pl.when((t_i % NTS) == 0)
+        def store_fn():
+            @pl.when(h_o_buf > 0)
+            def wait_prev():
+                pre_nts = i - NTS
+                b_pre_i, h_pre_i, k_pre_i, v_pre_i, t_pre_i = get_index(pre_nts)
+                k_pre_slice = pl.ds(k_pre_i * BK, BK)
+                v_pre_slice = pl.ds(v_pre_i * BV, BV)
+                b_pre_slice = b_part_i * local_B + b_pre_i
+                _async_copy(
+                    h_out_scratch_ref.at[next_h_o_buf],
+                    h_ref.at[b_pre_slice, t_pre_i // NTS, h_pre_i, k_pre_slice, v_pre_slice],
+                    sems.at[4, next_h_o_buf],
+                    True,
+                )
+            h_out_scratch_ref[h_o_buf] = o_scratch_ref[...]
+            _async_copy(h_out_scratch_ref.at[h_o_buf], h_ref.at[b_slice, i_s, h_i, k_slice, v_slice], sems.at[4, h_o_buf])
+            
+            @pl.when(i == all - NTS)
+            def _():
+                _async_copy(h_out_scratch_ref.at[h_o_buf], h_ref.at[b_slice, i_s, h_i, k_slice, v_slice], sems.at[4, h_o_buf], True)
+
+            h_o_buf = h_o_buf + 1
+        
+       
+
+        @pl.when(i + 1 < all)
+        def do_prefetch():
+            _async_copy(
+                k_ref.at[(b_next_slice, h_next_i,  t_next_slice, k_next_slice)],
+                k_scratch_ref.at[next_buf],
+                sems.at[0, next_buf],
+                False,
+            )
+            _async_copy(
+                v_ref.at[(b_next_slice, h_next_i, t_next_slice, v_next_slice)],
+                v_scratch_ref.at[next_buf],
+                sems.at[1, next_buf],
+                False
+            )
+
+            if gk_ref is not None:
+                _async_copy(
+                    gk_ref.at[(b_next_slice, h_next_i,  t_next_slice, k_next_slice)],
+                    gk_scratch_ref.at[next_buf],
+                    sems.at[2, next_buf],
+                    False,
+                )
+            
+            @pl.when(t_i == NT)
+            def _():
+                if h0_ref is not None:
+                    _async_copy(h0_ref.at[(b_next_slice, h_next_i, k_next_slice, v_next_slice)],
+                            h0_scratch_ref.at[next_h_buf],
+                            sems.at[3, next_h_buf])
+                    h_buf = h_buf + 1
+
+        wait()
+        
+        k_tile = k_scratch_ref[buf]
+        v_tile = v_scratch_ref[buf]
+        if gk_ref is not None:
+            gk_tile = gk_scratch_ref[buf]
+            g_last = gk_tile[-1, :]
+            decay = jnp.exp(g_last)
+            o_scratch_ref[...] = o_scratch_ref[...] * decay[:, None]  # [BK, BV] * [BK,1]
+            k_tile = (k_tile * jnp.exp(g_last[None, :] - gk_tile)).astype(gk_tile.dtype)
+
+        o_scratch_ref[...] = o_scratch_ref[...] + jax.lax.dot(k_tile.T, v_tile)      
+
     
+        @pl.when(t_i + 1 == NT)
+        def output_ht():
+
+            ht_out_scratch_ref[ht_buf] = o_scratch_ref[...]
+            @pl.when(ht_buf > 0)
+            def _():
+                _async_copy(ht_out_scratch_ref[next_ht_buf], ht_ref.at[b_slice, h_i, k_slice, v_slice], sems.at[5, next_ht_buf], True)
+            
+            _async_copy(ht_out_scratch_ref[ht_buf], ht_ref.at[b_slice, h_i, k_slice, v_slice], sems.at[5, ht_buf], True)
+            
+            @pl.when(i == all - 1)
+            def _():
+                _async_copy(ht_out_scratch_ref[ht_buf], ht_ref.at[b_slice, h_i, k_slice, v_slice], sems.at[5, ht_buf], True)
+
+            ht_buf = ht_buf + 1
 
 
 @functools.partial(
@@ -516,6 +569,7 @@ def chunk_fwd_h_kernel_with_same_seq(
     v_scratch = pltpu.VMEM((2, BT, BV), jnp.float32)
     o_scratch = pltpu.VMEM((BK, BV), jnp.float32)
     h_out_scratch = pltpu.VMEM((2, BK, BV), jnp.float32)
+    ht_out_scratch = pltpu.VMEM((2, BK, BV), jnp.float32)
     scratch_shapes = [k_scratch, v_scratch]
     if h0 is not None:
         in_specs.append(pl.BlockSpec(memory_space=pltpu.HBM))
@@ -534,6 +588,8 @@ def chunk_fwd_h_kernel_with_same_seq(
 
     scratch_shapes.append(o_scratch)
     scratch_shapes.append(h_out_scratch)
+    scratch_shapes.append(ht_out_scratch)
+    
 
     kernel = functools.partial(
         _chunk_fwd_h_kernel_with_same_seq,
