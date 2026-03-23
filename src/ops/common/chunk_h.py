@@ -512,7 +512,7 @@ def chunk_fwd_h_kernel_with_same_seq(
     ]
     k_scratch = pltpu.VMEM((2, BT, BK), jnp.float32)
     v_scratch = pltpu.VMEM((2, BT, BV), jnp.float32)
-    o_scratch = pltpu.VMEM((BT, BV), jnp.float32)
+    o_scratch = pltpu.VMEM((BK, BV), jnp.float32)
     scratch_shapes = [k_scratch, v_scratch]
     if h0 is not None:
         in_specs.append(pl.BlockSpec(memory_space=pltpu.HBM))
