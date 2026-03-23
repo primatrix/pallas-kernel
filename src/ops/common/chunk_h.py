@@ -282,7 +282,6 @@ def _chunk_fwd_h_kernel_with_same_seq(
                 def v_body(v_i):
                     nonlocal h_buff
                     h_buff = jnp.mod(h_buff, 2)
-                    next_h_buff = jnp.mod(h_buff + 1, 2)
 
                     k_slice = pl.ds(k_i * BK, BK)
                     v_slice = pl.ds(v_i * BV, BV)
@@ -352,8 +351,6 @@ def _chunk_fwd_h_kernel_with_same_seq(
                         @pl.when(i_t == 0)
                         def init():
                             if h0_ref is not None:
-                                # h0 DMA 在循环前只 start 一次，必须在此处（i_t==0）等待，
-                                # 而不能在 wait() 中无条件等待（否则 i_t>=1 时死锁）。
                                 _async_copy(h0_ref.at[(b_slice, h_i, k_slice, v_slice)],
                                         h0_scratch_ref.at[h_buff],
                                         sems.at[3, h_buff], True)
@@ -392,14 +389,6 @@ def _chunk_fwd_h_kernel_with_same_seq(
                                     False,
                                 )
 
-                        @pl.when(i_t + 1 == NT)
-                        def prefetch_h0():
-                            if h0_ref is not None:
-                                _async_copy(h0_ref.at[(b_slice, h_i,  k_slice, v_slice)],
-                                        h0_scratch_ref.at[next_h_buff],
-                                        sems.at[3, next_h_buff], False)
-                        
-                            
                         k_tile = k_scratch_ref[buf]
                         v_tile = v_scratch_ref[buf]
                         if gk_ref is not None:
