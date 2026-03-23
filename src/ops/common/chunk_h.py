@@ -378,8 +378,43 @@ def _chunk_fwd_h_kernel_with_same_seq(
                     o_scratch_ref[...] = jnp.zeros((BK, BV), dtype=jnp.float32)
 
 
+        # ── 1. 立即启动下一次迭代的预取 DMA ──────────────────────────────────
+        # 把 do_prefetch 放在 wait() 之前：DMA 在整个 wait+store+compute
+        # 期间都在跑，到下一次迭代 wait() 时已完成，零等待。
+        @pl.when(i + 1 < all)
+        def do_prefetch():
+            _async_copy(
+                k_ref.at[(b_next_slice, h_next_i, t_next_slice, k_next_slice)],
+                k_scratch_ref.at[next_buf],
+                sems.at[0, next_buf],
+                False,
+            )
+            _async_copy(
+                v_ref.at[(b_next_slice, h_next_i, t_next_slice, v_next_slice)],
+                v_scratch_ref.at[next_buf],
+                sems.at[1, next_buf],
+                False,
+            )
+            if gk_ref is not None:
+                _async_copy(
+                    gk_ref.at[(b_next_slice, h_next_i, t_next_slice, k_next_slice)],
+                    gk_scratch_ref.at[next_buf],
+                    sems.at[2, next_buf],
+                    False,
+                )
+            @pl.when(t_i == NT - 1)
+            def _():
+                if h0_ref is not None:
+                    _async_copy(
+                        h0_ref.at[(b_next_slice, h_next_i, k_next_slice, v_next_slice)],
+                        h0_scratch_ref.at[next_h_buf],
+                        sems.at[3, next_h_buf],
+                    )
+
+        # ── 2. 等待当前迭代的 DMA 完成 ────────────────────────────────────
         wait()
 
+        # ── 3. 存储中间状态（在 compute 前，o_scratch 是上一步结束后的状态）
         i_s = t_i // NTS
         @pl.when((t_i % NTS) == 0)
         def store_fn():
@@ -393,45 +428,11 @@ def _chunk_fwd_h_kernel_with_same_seq(
                 )
             h_out_scratch_ref[h_o_buf] = o_scratch_ref[...]
             _async_copy(h_out_scratch_ref.at[h_o_buf], h_ref.at[b_slice, i_s, h_i, k_slice, v_slice], sems.at[4, h_o_buf])
-            
             @pl.when(i == all - NTS)
             def _():
                 _async_copy(h_out_scratch_ref.at[h_o_buf], h_ref.at[b_slice, i_s, h_i, k_slice, v_slice], sems.at[4, h_o_buf], True)
-        
-       
 
-        @pl.when(i + 1 < all)
-        def do_prefetch():
-            _async_copy(
-                k_ref.at[(b_next_slice, h_next_i,  t_next_slice, k_next_slice)],
-                k_scratch_ref.at[next_buf],
-                sems.at[0, next_buf],
-                False,
-            )
-            _async_copy(
-                v_ref.at[(b_next_slice, h_next_i, t_next_slice, v_next_slice)],
-                v_scratch_ref.at[next_buf],
-                sems.at[1, next_buf],
-                False
-            )
-
-            if gk_ref is not None:
-                _async_copy(
-                    gk_ref.at[(b_next_slice, h_next_i,  t_next_slice, k_next_slice)],
-                    gk_scratch_ref.at[next_buf],
-                    sems.at[2, next_buf],
-                    False,
-                )
-            
-            @pl.when(t_i == NT - 1)
-            def _():
-                if h0_ref is not None:
-                    _async_copy(h0_ref.at[(b_next_slice, h_next_i, k_next_slice, v_next_slice)],
-                            h0_scratch_ref.at[next_h_buf],
-                            sems.at[3, next_h_buf])
-
-
-        
+        # ── 4. 计算 ───────────────────────────────────────────────────────
         k_tile = k_scratch_ref[buf]
         v_tile = v_scratch_ref[buf]
         if gk_ref is not None:
