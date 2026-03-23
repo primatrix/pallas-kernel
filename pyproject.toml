@@ -30,6 +30,7 @@ gpu = [
 tpu = [
     "jax[tpu]>=0.8.1",
     "torch",
+    "torch-xla[tpu]"
 ]
 profile = [
     "xprof==2.22.0",
